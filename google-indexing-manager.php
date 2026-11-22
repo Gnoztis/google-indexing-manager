@@ -1,21 +1,28 @@
 <?php
 /**
- * Plugin Name: Google Indexing Manager
- * Description: Проверяет не проиндексированные URL и отправляет их на повторную индексацию через Google API.
- * Version: 1.11.0
- * Requires at least: 6.1
- * Requires PHP: 8.4
- * Author: Your Name
- * License: GPLv2 or later
- * License URI: https://www.gnu.org/licenses/gpl-2.0.html
- * Text Domain: google-indexing-manager
+ * Plugin Name:       Google Indexing Manager
+ * Description:       Проверяет не проиндексированные URL и отправляет их на повторную индексацию через Google API.
+ * Version:           1.12.0
+ * Requires at least: 7.0
+ * Requires PHP:      8.4
+ * Tested up to:      7.1
+ * Author:            Gnostis
+ * Author URI:        https://github.com/Gnoztis
+ * License:           GPL-2.0-or-later
+ * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
+ * Text Domain:       google-indexing-manager
+ * Domain Path:       /languages
+ * Update URI:        https://github.com/Gnoztis/google-indexing-manager
+ *
+ * @package GoogleIndexingManager
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'GIM_VERSION', '1.11.0' );
+define( 'GIM_VERSION', '1.12.0' );
+define( 'GIM_PLUGIN_FILE', __FILE__ );
 define( 'GIM_DIR', __DIR__ );
 define( 'GIM_URL', plugin_dir_url( __FILE__ ) );
 define( 'GIM_SLUG', 'google-indexing-manager' );
@@ -25,8 +32,10 @@ define( 'GIM_CRON_VERSION', 8 );
 $gim_required_files = [
     'includes/class-logger.php',
     'includes/class-queue.php',
+    'includes/class-gim-token-crypto.php',
     'includes/class-google-api.php',
     'includes/class-cron.php',
+    'includes/class-gim-github-updater.php',
     'includes/class-admin.php',
     'includes/admin/admin-stats.php',
     'includes/admin/admin-urls.php',
@@ -40,6 +49,7 @@ $gim_missing_files = [];
 foreach ( $gim_required_files as $gim_file ) {
     $gim_path = GIM_DIR . '/' . $gim_file;
     if ( file_exists( $gim_path ) ) {
+        // phpcs:ignore WordPressVIPMinimum.Files.IncludingFile.UsingVariable -- path built from GIM_DIR and a literal list above, never from user input.
         require_once $gim_path;
     } else {
         $gim_missing_files[] = $gim_file;
@@ -49,15 +59,22 @@ foreach ( $gim_required_files as $gim_file ) {
 $gim_required_functions = [
     'gim_log'                      => 'includes/class-logger.php',
     'gim_current_user_is_admin'    => 'includes/class-logger.php',
+    'gim_acquire_lock'             => 'includes/class-queue.php',
+    'gim_release_lock'             => 'includes/class-queue.php',
     'gim_get_sent_today'           => 'includes/class-queue.php',
     'gim_get_urls_to_recheck'      => 'includes/class-queue.php',
     'gim_refresh_stats_snapshot'   => 'includes/class-queue.php',
     'gim_get_stats_snapshot'       => 'includes/class-queue.php',
     'gim_purge_old_logs'           => 'includes/class-queue.php',
     'gim_get_log_lifetime_days'    => 'includes/class-queue.php',
+    'gim_get_json_key'             => 'includes/class-gim-token-crypto.php',
+    'gim_json_key_state'           => 'includes/class-gim-token-crypto.php',
+    'gim_delete_json_key'          => 'includes/class-gim-token-crypto.php',
+    'gim_token_crypto_init'        => 'includes/class-gim-token-crypto.php',
     'gim_get_access_token'         => 'includes/class-google-api.php',
     'gim_cron_init'                => 'includes/class-cron.php',
     'gim_cron_register_healthcheck' => 'includes/class-cron.php',
+    'gim_updater_init'             => 'includes/class-gim-github-updater.php',
     'gim_admin_init'               => 'includes/class-admin.php',
     'gim_render_stats'             => 'includes/admin/admin-stats.php',
     'gim_render_urls'              => 'includes/admin/admin-urls.php',
@@ -96,6 +113,7 @@ function gim_create_tables( bool $recreate_unindexed = false ): void {
     ) {$charset};";
 
     if ( $recreate_unindexed ) {
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL without placeholders; the table name comes from $wpdb->prefix.
         $wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}gim_unindexed" );
     }
 
@@ -138,7 +156,8 @@ function gim_maybe_add_indexes(): void {
             'gim_idx_sent_at'    => '(sent_at)',
         ];
         $existing = [];
-        $rows     = $wpdb->get_results( "SHOW INDEX FROM {$table}", ARRAY_A );
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- SHOW INDEX without placeholders; the table name comes from $wpdb->prefix.
+        $rows = $wpdb->get_results( "SHOW INDEX FROM {$table}", ARRAY_A );
         if ( is_array( $rows ) ) {
             foreach ( $rows as $row ) {
                 $existing[ (string) ( $row['Key_name'] ?? '' ) ] = true;
@@ -146,6 +165,7 @@ function gim_maybe_add_indexes(): void {
         }
         foreach ( $wanted as $name => $cols ) {
             if ( ! isset( $existing[ $name ] ) ) {
+                // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL without placeholders; names are built from $wpdb->prefix and the literal list above.
                 $wpdb->query( "ALTER TABLE {$table} ADD INDEX {$name} {$cols}" );
             }
         }
@@ -159,7 +179,8 @@ function gim_maybe_add_indexes(): void {
             'gim_idx_level'    => '(level)',
         ];
         $existing_log = [];
-        $rows_log     = $wpdb->get_results( "SHOW INDEX FROM {$table_log}", ARRAY_A );
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- SHOW INDEX without placeholders; the table name comes from $wpdb->prefix.
+        $rows_log = $wpdb->get_results( "SHOW INDEX FROM {$table_log}", ARRAY_A );
         if ( is_array( $rows_log ) ) {
             foreach ( $rows_log as $row ) {
                 $existing_log[ (string) ( $row['Key_name'] ?? '' ) ] = true;
@@ -167,6 +188,7 @@ function gim_maybe_add_indexes(): void {
         }
         foreach ( $wanted_log as $name => $cols ) {
             if ( ! isset( $existing_log[ $name ] ) ) {
+                // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL without placeholders; names are built from $wpdb->prefix and the literal list above.
                 $wpdb->query( "ALTER TABLE {$table_log} ADD INDEX {$name} {$cols}" );
             }
         }
@@ -300,6 +322,8 @@ if ( ! empty( $gim_missing_files ) || ! empty( $gim_missing_functions ) ) {
     add_action( 'admin_init', 'gim_cron_healthcheck_bootstrap' );
 
     function gim_init(): void {
+        gim_token_crypto_init();
+        gim_updater_init();
         gim_admin_init();
         gim_ajax_init();
         gim_cron_init();

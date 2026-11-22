@@ -267,6 +267,10 @@ function gim_cron_sync_urls_tick(): void {
         gim_schedule_next_sync_urls();
     }
 
+    if ( ! gim_acquire_lock( 'sync_urls', 900 ) ) {
+        return;
+    }
+
     try {
         $urls  = gim_get_site_urls();
         $added = gim_add_urls( $urls );
@@ -280,6 +284,8 @@ function gim_cron_sync_urls_tick(): void {
         );
     } catch ( Throwable $e ) {
         gim_log_error( 'Ошибка синхронизации URL: ' . $e->getMessage() );
+    } finally {
+        gim_release_lock( 'sync_urls' );
     }
 
     gim_schedule_next_sync_urls();
@@ -299,6 +305,10 @@ function gim_cron_sync_tags_tick(): void {
         gim_schedule_next_sync_tags();
     }
 
+    if ( ! gim_acquire_lock( 'sync_tags', 900 ) ) {
+        return;
+    }
+
     try {
         $excluded = gim_recompute_exclusions();
 
@@ -307,6 +317,8 @@ function gim_cron_sync_tags_tick(): void {
         );
     } catch ( Throwable $e ) {
         gim_log_error( 'Ошибка синхронизации исключений: ' . $e->getMessage() );
+    } finally {
+        gim_release_lock( 'sync_tags' );
     }
 
     gim_schedule_next_sync_tags();
@@ -326,11 +338,11 @@ function gim_cron_check_tick(): void {
         wp_schedule_single_event( time() + GIM_CHECK_INTERVAL + 30, 'gim_cron_check_tick' );
     }
 
-    if ( get_transient( 'gim_check_running' ) ) {
+    if ( ! gim_acquire_lock( 'check_tick', GIM_CHECK_INTERVAL ) ) {
+        // Another request is already checking URLs: do not start a second run.
         gim_schedule_next_check( GIM_CHECK_INTERVAL );
         return;
     }
-    set_transient( 'gim_check_running', 1, 300 );
 
     try {
         if ( gim_is_quota_exhausted( 'inspection' ) ) {
@@ -387,7 +399,7 @@ function gim_cron_check_tick(): void {
         gim_schedule_next_check( $has_work ? GIM_CHECK_INTERVAL : GIM_SEND_IDLE_INTERVAL );
 
     } finally {
-        delete_transient( 'gim_check_running' );
+        gim_release_lock( 'check_tick' );
     }
 }
 
@@ -407,11 +419,11 @@ function gim_cron_send_tick( $force = false ): void {
 
     $force = (bool) $force;
 
-    if ( get_transient( 'gim_send_running' ) ) {
+    if ( ! gim_acquire_lock( 'send_tick', GIM_SEND_INTERVAL ) ) {
+        // Another request is already sending: do not double-spend the quota.
         gim_schedule_next_send( GIM_SEND_INTERVAL );
         return;
     }
-    set_transient( 'gim_send_running', 1, 300 );
 
     try {
         if ( ! $force && ! gim_is_night_now() ) {
@@ -498,7 +510,7 @@ function gim_cron_send_tick( $force = false ): void {
         gim_schedule_next_send( GIM_SEND_INTERVAL );
 
     } finally {
-        delete_transient( 'gim_send_running' );
+        gim_release_lock( 'send_tick' );
     }
 }
 

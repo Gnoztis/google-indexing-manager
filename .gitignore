@@ -1,0 +1,40 @@
+# Operating system and editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+
+# Local tooling and dependency directories
+vendor/
+node_modules/
+composer.phar
+composer.lock
+phpcs.xml
+phpcs.xml.dist
+.phpunit.result.cache
+package-lock.json
+
+# Logs, database dumps and archives
+*.log
+*.sql
+*.sql.gz
+*.sqlite
+*.dump
+*.zip
+*.tar.gz
+
+# Service-account and other private keys must never be committed
+*-credentials.json
+*service-account*.json
+service-account*.json
+credentials.json
+*.pem
+*.p12
+*.pfx
+*.key
+id_rsa*
+
+# Local environment files
+.env
+.env.*

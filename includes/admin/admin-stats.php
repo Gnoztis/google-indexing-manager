@@ -183,7 +183,7 @@ function gim_render_stats(): void {
                             <?php endif; ?>
                         </span>
                         <span class="gim-trend-value">
-                            <?php echo ( $card['trend'] > 0 ? '+' : '' ) . (int) $card['trend']; ?>
+                            <?php echo esc_html( ( $card['trend'] > 0 ? '+' : '' ) . (int) $card['trend'] ); ?>
                         </span>
                     </div>
                 </div>

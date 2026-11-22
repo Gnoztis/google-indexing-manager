@@ -206,7 +206,7 @@ function gim_render_urls(): void {
                     <?php foreach ( $per_page_options as $opt ) : ?>
                         <?php $is_sel = ( (int) $per_page_selected === (int) $opt ); ?>
                         <option
-                            value="<?php echo esc_attr( (string) $opt ); ?>"<?php echo $is_sel ? ' selected="selected"' : ''; ?>>
+                            value="<?php echo esc_attr( (string) $opt ); ?>"<?php echo $is_sel ? ' selected="selected"' : ''; // phpcs:ignore WordPress.Security.EscapeOutput -- literal attribute, guarded by a strict comparison. ?>>
                             <?php echo (int) $opt; ?>
                         </option>
                     <?php endforeach; ?>

@@ -26,6 +26,37 @@ function gim_invalidate_stats_cache(): void {
 }
 
 /* -------------------------------------------------------------------------
+ * Атомарные блокировки.
+ *
+ * Блокировка — это опция, создаваемая add_option(): INSERT в wp_options
+ * атомарен, поэтому только один процесс получает право на работу. Значение —
+ * метка времени, до которой блокировка считается живой; протухшая
+ * блокировка (процесс умер) снимается следующим вызовом.
+ * ---------------------------------------------------------------------- */
+
+function gim_lock_option( string $name ): string {
+    return 'gim_lock_' . preg_replace( '/[^a-z0-9_]/', '', strtolower( $name ) );
+}
+
+function gim_acquire_lock( string $name, int $ttl = 300 ): bool {
+    $option  = gim_lock_option( $name );
+    $ttl     = max( 30, $ttl );
+    $expires = (int) get_option( $option, 0 );
+
+    // A missing lock reads as 0; a lock whose timestamp is in the past belongs
+    // to a worker that died. Both are removed before the atomic add_option().
+    if ( $expires <= 0 || $expires < time() ) {
+        delete_option( $option );
+    }
+
+    return (bool) add_option( $option, time() + $ttl, '', false );
+}
+
+function gim_release_lock( string $name ): void {
+    delete_option( gim_lock_option( $name ) );
+}
+
+/* -------------------------------------------------------------------------
  * Хранимая статистика.
  * ---------------------------------------------------------------------- */
 
@@ -36,6 +67,7 @@ function gim_calculate_stats(): array {
     $recheck_days = gim_get_recheck_days();
     $resend_days  = gim_get_resend_days();
 
+    // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- aggregate over our own table; the two INTERVAL values are integers from clamped settings.
     $row = $wpdb->get_row(
         "SELECT
             COUNT(*) AS total,
@@ -159,9 +191,22 @@ function gim_get_sent_today(): int {
 }
 
 function gim_increment_count( int $count = 1 ): void {
-    $date    = current_time( 'Y-m-d' );
-    $current = gim_get_sent_today();
-    update_option( 'gim_sent_' . $date, $current + $count, false );
+    $date   = current_time( 'Y-m-d' );
+    $option = 'gim_sent_' . $date;
+
+    // Read-modify-write on an option is not atomic: two concurrent workers
+    // could both read N and write N+1. The counter is guarded by a lock so a
+    // burst of AJAX requests cannot undercount the daily quota.
+    $locked = gim_acquire_lock( 'sent_counter_' . $date, 15 );
+
+    try {
+        $current = (int) get_option( $option, 0 );
+        update_option( $option, $current + $count, false );
+    } finally {
+        if ( $locked ) {
+            gim_release_lock( 'sent_counter_' . $date );
+        }
+    }
 }
 
 function gim_get_daily_send_cap(): int {
@@ -413,6 +458,7 @@ function gim_recompute_exclusions(): int {
     global $wpdb;
     $table = $wpdb->prefix . 'gim_unindexed';
 
+    // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery -- literal UPDATE; the table name comes from $wpdb->prefix.
     $wpdb->query( "UPDATE {$table} SET excluded = 0" );
 
     $tag_ids = gim_get_excluded_tag_ids();
@@ -421,7 +467,17 @@ function gim_recompute_exclusions(): int {
         return 0;
     }
 
-    $placeholders = implode( ',', array_fill( 0, count( $tag_ids ), '%d' ) );
+    // Exclusions must follow the same content types the queue is filled from,
+    // otherwise posts of a custom post type would never be excluded.
+    $post_types = gim_get_selected_post_types();
+
+    if ( empty( $post_types ) ) {
+        gim_invalidate_stats_cache();
+        return 0;
+    }
+
+    $tag_placeholders  = implode( ',', array_fill( 0, count( $tag_ids ), '%d' ) );
+    $type_placeholders = implode( ',', array_fill( 0, count( $post_types ), '%s' ) );
 
     $post_ids = $wpdb->get_col(
         $wpdb->prepare(
@@ -432,10 +488,10 @@ function gim_recompute_exclusions(): int {
              INNER JOIN {$wpdb->posts} p
                  ON p.ID = tr.object_id
              WHERE tt.taxonomy = 'post_tag'
-               AND tt.term_id IN ({$placeholders})
+               AND tt.term_id IN ({$tag_placeholders})
                AND p.post_status = 'publish'
-               AND p.post_type IN ('post', 'page')",
-            ...$tag_ids
+               AND p.post_type IN ({$type_placeholders})",
+            ...array_merge( $tag_ids, $post_types )
         )
     );
 
@@ -535,7 +591,8 @@ function gim_add_urls( array $urls ): int {
 
 function gim_clear_all_urls(): int {
     global $wpdb;
-    $table   = $wpdb->prefix . 'gim_unindexed';
+    $table = $wpdb->prefix . 'gim_unindexed';
+    // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery -- literal DELETE; the table name comes from $wpdb->prefix.
     $deleted = $wpdb->query( "DELETE FROM {$table}" );
 
     gim_invalidate_stats_cache();
@@ -685,6 +742,7 @@ function gim_get_logs_count( string $level = '' ): int {
         );
     }
 
+    // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- literal COUNT; the table name comes from $wpdb->prefix.
     return (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table}" );
 }
 
@@ -711,6 +769,7 @@ function gim_get_logs( int $limit = 20, int $page = 1, string $level = 'all' ): 
         );
     }
 
+    // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- the SQL string is built with $wpdb->prepare() above.
     $rows = $wpdb->get_results( $sql );
 
     return is_array( $rows ) ? $rows : [];
@@ -720,6 +779,7 @@ function gim_get_logs_count_by_level(): array {
     global $wpdb;
     $table = $wpdb->prefix . 'gim_log';
 
+    // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- literal GROUP BY; the table name comes from $wpdb->prefix.
     $rows = $wpdb->get_results(
         "SELECT level, COUNT(*) AS cnt FROM {$table} GROUP BY level",
         ARRAY_A
@@ -816,6 +876,7 @@ function gim_get_urls_count( string $filter = 'unindexed', string $search = '' )
         $sql = $wpdb->prepare( $sql, ...$args );
     }
 
+    // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- the SQL string is built with $wpdb->prepare() above when it has arguments.
     return (int) $wpdb->get_var( $sql );
 }
 

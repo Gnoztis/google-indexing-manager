@@ -1010,3 +1010,161 @@
     color: #1d2327;
     box-shadow: 0 1px 0 #ccd0d4;
 }
+
+/* -------------------------------------------------------------------------
+ * Service-account key state and the setup help block.
+ *
+ * The stored key is never printed: the UI shows a fixed mask plus the
+ * non-secret client_email. Targets inside the help stay at least 24x24 px so
+ * the block is usable with a keyboard and with touch.
+ * ---------------------------------------------------------------------- */
+
+.gim-key-state {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 10px;
+    padding: 8px 12px;
+    background: #f6f7f7;
+    border: 1px solid #dcdcde;
+    border-left: 4px solid #2271b1;
+    border-radius: 4px;
+}
+
+.gim-key-state__label {
+    color: #50575e;
+    font-size: 13px;
+}
+
+.gim-key-mask {
+    letter-spacing: 2px;
+    background: transparent;
+    padding: 0;
+    color: #1d2327;
+}
+
+.gim-key-email {
+    background: #fff;
+    word-break: break-all;
+}
+
+.gim-key-notice {
+    margin: 0 0 12px;
+}
+
+.gim-key-notice p {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: 6px 0;
+}
+
+.gim-key-notice a,
+.gim-howto__step-link {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    padding: 2px 0;
+}
+
+.gim-key-delete {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 12px;
+}
+
+.gim-key-delete .button {
+    min-height: 30px;
+}
+
+.gim-howto {
+    margin: 12px 0 24px;
+    background: #fff;
+    border: 1px solid #dcdcde;
+    border-radius: 4px;
+}
+
+.gim-howto__summary {
+    display: flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 10px 14px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    color: #1d2327;
+    border-radius: 4px;
+}
+
+.gim-howto__summary:hover {
+    background: #f6f7f7;
+}
+
+.gim-howto__summary:focus-visible {
+    outline: 2px solid #2271b1;
+    outline-offset: -2px;
+}
+
+.gim-howto[open] .gim-howto__summary {
+    border-bottom: 1px solid #f0f0f1;
+}
+
+.gim-howto__body {
+    padding: 4px 18px 18px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: #1d2327;
+}
+
+.gim-howto__steps {
+    margin: 12px 0 18px;
+    padding-left: 22px;
+    list-style: decimal;
+}
+
+.gim-howto__step {
+    margin: 0 0 16px;
+}
+
+.gim-howto__step-title {
+    display: block;
+    margin-bottom: 4px;
+}
+
+.gim-howto__step-text {
+    margin: 0 0 6px;
+    color: #50575e;
+}
+
+.gim-howto__crypto {
+    margin-top: 8px;
+    padding: 12px 14px;
+    background: #f6f7f7;
+    border: 1px solid #dcdcde;
+    border-radius: 4px;
+}
+
+.gim-howto__crypto p {
+    margin: 8px 0;
+}
+
+.gim-howto__code {
+    margin: 8px 0;
+    padding: 10px 12px;
+    background: #1d2327;
+    color: #f0f0f1;
+    border-radius: 4px;
+    overflow-x: auto;
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+.gim-howto__code code {
+    background: transparent;
+    color: inherit;
+    padding: 0;
+}

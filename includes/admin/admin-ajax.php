@@ -68,6 +68,53 @@ function gim_is_valid_http_url( string $url ): bool {
     return in_array( strtolower( $parts['scheme'] ), [ 'http', 'https' ], true );
 }
 
+/**
+ * Hosts a URL may belong to: the site home URL and the configured Search
+ * Console property (URL-prefix or Domain property).
+ *
+ * The Indexing API quota and the service-account quota belong to this site, so
+ * a foreign URL must never be submitted: it would spend the quota and abuse the
+ * credentials. Only the exact host and its "www." variant are accepted.
+ *
+ * @return string[]
+ */
+function gim_site_hosts(): array {
+    $candidates = [ home_url( '/' ) ];
+
+    $property = gim_get_site_url();
+    if ( 0 === stripos( $property, 'sc-domain:' ) ) {
+        $candidates[] = 'https://' . substr( $property, strlen( 'sc-domain:' ) ) . '/';
+    } else {
+        $candidates[] = $property;
+    }
+
+    $hosts = [];
+    foreach ( $candidates as $candidate ) {
+        $host = strtolower( (string) wp_parse_url( (string) $candidate, PHP_URL_HOST ) );
+        if ( '' === $host ) {
+            continue;
+        }
+        $bare    = (string) preg_replace( '/^www\./', '', $host );
+        $hosts[] = $bare;
+        $hosts[] = 'www.' . $bare;
+    }
+
+    return array_values( array_unique( $hosts ) );
+}
+
+/**
+ * Whether the URL belongs to this site (and may therefore be sent to Google).
+ */
+function gim_url_belongs_to_site( string $url ): bool {
+    $host = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
+
+    if ( '' === $host ) {
+        return false;
+    }
+
+    return in_array( $host, gim_site_hosts(), true );
+}
+
 function gim_url_is_excluded( string $url ): bool {
     global $wpdb;
     $table = $wpdb->prefix . 'gim_unindexed';
@@ -272,6 +319,7 @@ function gim_ajax_reset_statuses(): void {
     global $wpdb;
     $table = $wpdb->prefix . 'gim_unindexed';
 
+    // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery -- literal UPDATE; the table name comes from $wpdb->prefix.
     $updated = $wpdb->query(
         "UPDATE {$table} SET indexed = NULL, coverage = NULL, checked_at = NULL"
     );
@@ -307,8 +355,12 @@ function gim_ajax_check_url(): void {
     gim_ajax_guard();
 
     $url = isset( $_POST['url'] ) ? esc_url_raw( wp_unslash( $_POST['url'] ) ) : '';
-    if ( $url === '' || ! gim_is_valid_http_url( $url ) ) {
+    if ( $url === '' || strlen( $url ) > 2000 || ! gim_is_valid_http_url( $url ) ) {
         gim_ajax_error( 'Некорректный URL.' );
+    }
+
+    if ( ! gim_url_belongs_to_site( $url ) ) {
+        gim_ajax_error( 'URL не принадлежит этому сайту: проверка чужих адресов запрещена.', 422 );
     }
 
     if ( gim_is_quota_exhausted( 'inspection' ) ) {
@@ -362,8 +414,12 @@ function gim_ajax_send_url(): void {
     gim_ajax_guard();
 
     $url = isset( $_POST['url'] ) ? esc_url_raw( wp_unslash( $_POST['url'] ) ) : '';
-    if ( $url === '' || ! gim_is_valid_http_url( $url ) ) {
+    if ( $url === '' || strlen( $url ) > 2000 || ! gim_is_valid_http_url( $url ) ) {
         gim_ajax_error( 'Некорректный URL.' );
+    }
+
+    if ( ! gim_url_belongs_to_site( $url ) ) {
+        gim_ajax_error( 'URL не принадлежит этому сайту: отправка чужих адресов запрещена.', 422 );
     }
 
     if ( gim_url_is_excluded( $url ) ) {
@@ -438,20 +494,27 @@ function gim_ajax_diagnostic(): void {
 
     $results = [];
 
-    // 1. JSON-ключ.
-    $json_key = (string) gim_get_option( 'json_key', '' );
-    if ( $json_key === '' ) {
+    // 1. JSON-ключ. The stored value is encrypted; only client_email, which is
+    // not a secret, ever reaches the response.
+    $key_state = gim_json_key_state();
+
+    if ( ! $key_state['configured'] ) {
         $results['json_key'] = gim_diagnostic_result( 'fail', 'JSON-ключ не задан.' );
+    } elseif ( ! $key_state['readable'] ) {
+        $results['json_key'] = gim_diagnostic_result(
+            'fail',
+            'Ключ не читается: изменились соли WordPress или константа GIM_KEY_ENCRYPTION_KEY. Вставьте JSON-ключ заново на вкладке «Настройки».'
+        );
     } else {
-        $credentials = json_decode( $json_key, true );
-        if ( json_last_error() !== JSON_ERROR_NONE || ! is_array( $credentials ) ) {
-            $results['json_key'] = gim_diagnostic_result( 'fail', 'JSON невалиден: ' . esc_html( json_last_error_msg() ) );
-        } elseif ( empty( $credentials['client_email'] ) || empty( $credentials['private_key'] ) ) {
-            $results['json_key'] = gim_diagnostic_result( 'fail', 'Нет client_email или private_key.' );
+        $validation = Gim_Token_Crypto::validate( gim_get_json_key() );
+
+        if ( ! $validation['ok'] ) {
+            $results['json_key'] = gim_diagnostic_result( 'fail', esc_html( $validation['message'] ) );
         } else {
+            $email = $key_state['client_email'] !== '' ? $key_state['client_email'] : $validation['client_email'];
             $results['json_key'] = gim_diagnostic_result(
                 'ok',
-                'Аккаунт: <code>' . esc_html( $credentials['client_email'] ) . '</code>'
+                'Аккаунт: <code>' . esc_html( $email ) . '</code>'
             );
         }
     }

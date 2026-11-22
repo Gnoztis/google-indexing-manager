@@ -7,6 +7,172 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
+/**
+ * Steps of the "Как подключить" help.
+ *
+ * One place for the titles, texts and documentation links. Links point only at
+ * developers.google.com and search.google.com and open in a new tab. Nothing
+ * here contains key material: the real JSON stays in the administrator's file.
+ *
+ * @return array<int, array{title:string, text:string, link_label:string, link_url:string}>
+ */
+function gim_get_setup_steps(): array {
+    return [
+        [
+            'title'      => __( 'Шаг 1. Google Cloud: сервисный аккаунт и JSON-ключ', 'google-indexing-manager' ),
+            'text'       => __( 'Создайте проект в Google Cloud, включите в нём Indexing API, а для проверки статуса — ещё и Google Search Console API. Затем создайте сервисный аккаунт, откройте его ключи и выпустите ключ в формате JSON: файл скачивается один раз.', 'google-indexing-manager' ),
+            'link_label' => __( 'Indexing API: включение API и создание сервисного аккаунта (developers.google.com)', 'google-indexing-manager' ),
+            'link_url'   => 'https://developers.google.com/search/apis/indexing-api/v3/prereqs',
+        ],
+        [
+            'title'      => __( 'Шаг 2. Search Console: доступ для сервисного аккаунта', 'google-indexing-manager' ),
+            'text'       => __( 'Откройте Search Console нужного сайта, раздел «Настройки» → «Пользователи и разрешения», и добавьте адрес client_email из JSON-файла (вида name@project.iam.gserviceaccount.com) с правами «Владелец» или «Полный доступ». Без этого Google вернёт ошибку 403.', 'google-indexing-manager' ),
+            'link_label' => __( 'Search Console: пользователи и разрешения (search.google.com)', 'google-indexing-manager' ),
+            'link_url'   => 'https://search.google.com/search-console/users',
+        ],
+        [
+            'title'      => __( 'Шаг 3. Плагин: вставить JSON и проверить подключение', 'google-indexing-manager' ),
+            'text'       => __( 'Вставьте содержимое JSON-файла целиком в поле «JSON-ключ сервисного аккаунта» и сохраните настройки. Затем откройте вкладку «Диагностика» и нажмите «Запустить диагностику»: она проверит ключ, токен, доступ к ресурсу Search Console и оба API. После этого можно отправлять первый URL из очереди.', 'google-indexing-manager' ),
+            'link_label' => __( 'Indexing API: первый запрос и суточные квоты (developers.google.com)', 'google-indexing-manager' ),
+            'link_url'   => 'https://developers.google.com/search/apis/indexing-api/v3/quickstart',
+        ],
+    ];
+}
+
+/**
+ * Collapsible setup help on the settings screen.
+ *
+ * Rendered open while the key is missing or unreadable, so the steps are
+ * visible exactly when they are needed.
+ *
+ * @param array $key_state Result of gim_json_key_state().
+ */
+function gim_render_setup_help( array $key_state ): void {
+    $steps      = gim_get_setup_steps();
+    $open       = ( ! $key_state['configured'] || ! $key_state['readable'] );
+    $diagnostic = add_query_arg(
+        [
+            'page' => GIM_SLUG,
+            'tab'  => 'diagnostic',
+        ],
+        admin_url( 'options-general.php' )
+    );
+    ?>
+    <details id="gim-howto" class="gim-howto"<?php if ( $open ) : ?> open<?php endif; ?>>
+        <summary class="gim-howto__summary"><?php esc_html_e( 'Как подключить: три шага', 'google-indexing-manager' ); ?></summary>
+
+        <div class="gim-howto__body">
+            <ol class="gim-howto__steps">
+                <?php foreach ( $steps as $step ) : ?>
+                    <li class="gim-howto__step">
+                        <strong class="gim-howto__step-title"><?php echo esc_html( $step['title'] ); ?></strong>
+                        <p class="gim-howto__step-text"><?php echo esc_html( $step['text'] ); ?></p>
+                        <a class="gim-howto__step-link"
+                           href="<?php echo esc_url( $step['link_url'] ); ?>"
+                           target="_blank"
+                           rel="noopener noreferrer"><?php echo esc_html( $step['link_label'] ); ?></a>
+                    </li>
+                <?php endforeach; ?>
+            </ol>
+
+            <div class="gim-howto__crypto">
+                <strong class="gim-howto__step-title"><?php esc_html_e( 'Константа шифрования GIM_KEY_ENCRYPTION_KEY', 'google-indexing-manager' ); ?></strong>
+                <p>
+                    <?php esc_html_e( 'JSON-ключ содержит private_key: он подписывает запросы к Google и действует, пока его не отозвали в Google Cloud. Поэтому плагин хранит JSON зашифрованным, а ключ шифрования берёт из wp-config.php. Дамп базы без wp-config.php тогда бесполезен.', 'google-indexing-manager' ); ?>
+                </p>
+                <p><?php esc_html_e( 'Сгенерируйте ключ (32 байта в base64) на сервере или локально:', 'google-indexing-manager' ); ?></p>
+                <pre class="gim-howto__code"><code>php -r "echo base64_encode(random_bytes(32));"</code></pre>
+                <p><?php esc_html_e( 'Полученную строку добавьте в wp-config.php до строки «That’s all, stop editing!»:', 'google-indexing-manager' ); ?></p>
+                <pre class="gim-howto__code"><code>define( 'GIM_KEY_ENCRYPTION_KEY', 'вставьте-сюда-строку-base64' );</code></pre>
+                <p>
+                    <?php esc_html_e( 'Без этой константы ключ шифрования выводится из солей WordPress (AUTH_KEY, SECURE_AUTH_KEY, LOGGED_IN_KEY, NONCE_SALT). Если соли сменить, сохранённый JSON перестанет расшифровываться: плагин покажет «Ключ не читается» и попросит вставить JSON заново. С константой ключ от солей не зависит. Константу нельзя менять после сохранения ключа — иначе потребуется вставить JSON заново.', 'google-indexing-manager' ); ?>
+                </p>
+                <p>
+                    <?php esc_html_e( 'Потеря ключа шифрования не отзывает ключ сервисного аккаунта в Google Cloud. Если JSON мог попасть в чужие руки, удалите ключ в Google Cloud и выпустите новый.', 'google-indexing-manager' ); ?>
+                </p>
+                <p>
+                    <a class="gim-howto__step-link"
+                       href="<?php echo esc_url( $diagnostic ); ?>"><?php esc_html_e( 'Проверить подключение на вкладке «Диагностика»', 'google-indexing-manager' ); ?></a>
+                </p>
+            </div>
+        </div>
+    </details>
+    <?php
+}
+
+/**
+ * Contextual notice above the key field.
+ *
+ * Tells the administrator what to do in the current state and anchors the
+ * missing/unreadable case to the setup help block.
+ *
+ * @param array  $key_state      Result of gim_json_key_state().
+ * @param string $diagnostic_url URL of the diagnostic tab.
+ */
+function gim_render_key_context_notice( array $key_state, string $diagnostic_url ): void {
+    if ( '' !== $key_state['key_error'] ) {
+        ?>
+        <div class="notice notice-warning inline gim-key-notice">
+            <p>
+                <?php
+                printf(
+                    /* translators: %s: reason why encryption is unavailable. */
+                    esc_html__( 'Шифрование ключа недоступно: %s. Сохранить новый ключ нельзя, уже сохранённый продолжает работать.', 'google-indexing-manager' ),
+                    esc_html( $key_state['key_error'] )
+                );
+                ?>
+                <a href="#gim-howto"><?php esc_html_e( 'Как задать константу шифрования', 'google-indexing-manager' ); ?></a>
+            </p>
+        </div>
+        <?php
+        return;
+    }
+
+    if ( ! $key_state['configured'] ) {
+        ?>
+        <div class="notice notice-info inline gim-key-notice">
+            <p>
+                <?php esc_html_e( 'Ключ не задан. Выполните шаги 1–3 ниже.', 'google-indexing-manager' ); ?>
+                <a href="#gim-howto"><?php esc_html_e( 'Перейти к инструкции «Как подключить»', 'google-indexing-manager' ); ?></a>
+            </p>
+        </div>
+        <?php
+        return;
+    }
+
+    if ( ! $key_state['readable'] ) {
+        ?>
+        <div class="notice notice-error inline gim-key-notice">
+            <p>
+                <?php esc_html_e( 'Ключ не читается, вставьте JSON заново.', 'google-indexing-manager' ); ?>
+                <a href="#gim-howto"><?php esc_html_e( 'Как подключить: шаги и константа шифрования', 'google-indexing-manager' ); ?></a>
+            </p>
+        </div>
+        <?php
+        return;
+    }
+
+    $saved_at = (int) $key_state['saved_at'];
+    ?>
+    <div class="notice notice-success inline gim-key-notice">
+        <p>
+            <?php
+            if ( $saved_at > 0 ) {
+                printf(
+                    /* translators: %s: date and time when the key was saved. */
+                    esc_html__( 'Ключ сохранён %s.', 'google-indexing-manager' ),
+                    esc_html( wp_date( 'd.m.Y H:i', $saved_at ) )
+                );
+            } else {
+                esc_html_e( 'Ключ сохранён.', 'google-indexing-manager' );
+            }
+            ?>
+            <a href="<?php echo esc_url( $diagnostic_url ); ?>"><?php esc_html_e( 'Проверить подключение', 'google-indexing-manager' ); ?></a>
+        </p>
+    </div>
+    <?php
+}
+
 function gim_render_settings(): void {
     $night_start  = gim_get_night_start_hour();
     $night_end    = gim_get_night_end_hour();
@@ -35,20 +201,65 @@ function gim_render_settings(): void {
 
     $excluded_count = gim_get_excluded_count();
     $logs_total     = gim_get_logs_count( 'all' );
+    $key_state      = gim_json_key_state();
+    $diagnostic_url = add_query_arg(
+        [
+            'page' => GIM_SLUG,
+            'tab'  => 'diagnostic',
+        ],
+        admin_url( 'options-general.php' )
+    );
+
+    $delete_url = admin_url( 'admin-post.php' );
+
+    $key_deleted = isset( $_GET['gim_key_deleted'] )
+        ? '1' === sanitize_key( wp_unslash( $_GET['gim_key_deleted'] ) )
+        : false;
     ?>
     <h2><?php esc_html_e( 'Настройки интеграции', 'google-indexing-manager' ); ?></h2>
+
+    <?php if ( $key_deleted ) : ?>
+        <div class="notice notice-success inline">
+            <p><?php esc_html_e( 'JSON-ключ удалён. Пока не вставлен новый ключ, проверка и отправка URL работать не будут.', 'google-indexing-manager' ); ?></p>
+        </div>
+    <?php endif; ?>
+
     <form method="post" action="options.php">
         <?php settings_fields( 'gim_settings' ); ?>
         <table class="form-table">
-            <tr>
+            <tr id="gim-json-key-row">
                 <th>
                     <label for="gim_json_key"><?php esc_html_e( 'JSON-ключ сервисного аккаунта', 'google-indexing-manager' ); ?></label>
                 </th>
                 <td>
-                    <textarea id="gim_json_key" name="gim_json_key" rows="10" cols="60"
-                              class="large-text code"><?php echo esc_textarea( (string) gim_get_option( 'json_key', '' ) ); ?></textarea>
+                    <?php gim_render_key_context_notice( $key_state, $diagnostic_url ); ?>
+
+                    <?php if ( $key_state['configured'] && $key_state['readable'] ) : ?>
+                        <p class="gim-key-state">
+                            <span class="gim-key-state__label"><?php esc_html_e( 'Сохранённый ключ:', 'google-indexing-manager' ); ?></span>
+                            <code class="gim-key-mask"><?php echo esc_html( Gim_Token_Crypto::mask() ); ?></code>
+                            <?php if ( '' !== $key_state['client_email'] ) : ?>
+                                <code class="gim-key-email"><?php echo esc_html( $key_state['client_email'] ); ?></code>
+                            <?php endif; ?>
+                        </p>
+                    <?php endif; ?>
+
+                    <textarea id="gim_json_key" name="gim_json_key" rows="6" cols="60"
+                              class="large-text code"
+                              autocomplete="off"
+                              spellcheck="false"
+                              placeholder="<?php esc_attr_e( 'Вставьте содержимое JSON-файла сервисного аккаунта', 'google-indexing-manager' ); ?>"></textarea>
                     <p class="description">
-                        <?php esc_html_e( 'Содержимое JSON-файла сервисного аккаунта Google Cloud.', 'google-indexing-manager' ); ?>
+                        <?php esc_html_e( 'Поле всегда пустое: сохранённый ключ не показывается. Пустое сохранение оставляет текущий ключ, новый JSON заменяет его.', 'google-indexing-manager' ); ?>
+                    </p>
+                    <p class="description">
+                        <?php if ( 'constant' === $key_state['source'] ) : ?>
+                            <?php esc_html_e( 'Шифрование: ключ из константы GIM_KEY_ENCRYPTION_KEY в wp-config.php.', 'google-indexing-manager' ); ?>
+                        <?php elseif ( 'salts' === $key_state['source'] ) : ?>
+                            <?php esc_html_e( 'Шифрование: ключ, производный от солей WordPress. Задайте GIM_KEY_ENCRYPTION_KEY, чтобы ключ не зависел от смены солей.', 'google-indexing-manager' ); ?>
+                        <?php else : ?>
+                            <strong><?php esc_html_e( 'Шифрование недоступно: нет ни константы GIM_KEY_ENCRYPTION_KEY, ни солей WordPress. Сохранить ключ нельзя.', 'google-indexing-manager' ); ?></strong>
+                        <?php endif; ?>
                     </p>
                 </td>
             </tr>
@@ -67,6 +278,8 @@ function gim_render_settings(): void {
                 </td>
             </tr>
         </table>
+
+        <?php gim_render_setup_help( $key_state ); ?>
 
         <h3><?php esc_html_e( 'Синхронизация URL', 'google-indexing-manager' ); ?></h3>
         <p class="description">
@@ -209,7 +422,7 @@ function gim_render_settings(): void {
                             <input type="text"
                                    class="gim-tags__input"
                                    id="gim-tags-search"
-                                   placeholder="<?php echo $excluded_terms ? '' : esc_attr__( 'Начните вводить название тега…', 'google-indexing-manager' ); ?>"
+                                   placeholder="<?php echo esc_attr( $excluded_terms ? '' : __( 'Начните вводить название тега…', 'google-indexing-manager' ) ); ?>"
                                    autocomplete="off"
                                    spellcheck="false">
                         </div>
@@ -245,6 +458,21 @@ function gim_render_settings(): void {
     <hr class="gim-divider">
 
     <h2><?php esc_html_e( 'Обслуживание', 'google-indexing-manager' ); ?></h2>
+
+    <?php if ( $key_state['configured'] ) : ?>
+        <form method="post" action="<?php echo esc_url( $delete_url ); ?>" class="gim-key-delete">
+            <?php wp_nonce_field( 'gim_delete_json_key' ); ?>
+            <input type="hidden" name="action" value="gim_delete_json_key">
+            <button type="submit" class="button gim-danger">
+                <?php esc_html_e( 'Удалить JSON-ключ', 'google-indexing-manager' ); ?>
+            </button>
+            <span class="description">
+                <?php esc_html_e( 'Удаляет сохранённый ключ из базы безвозвратно. После этого проверка и отправка URL не работают до вставки нового ключа.', 'google-indexing-manager' ); ?>
+            </span>
+        </form>
+        <hr class="gim-divider">
+    <?php endif; ?>
+
     <p>
         <button type="button" class="button" id="gim-clear-token">
             <?php esc_html_e( 'Сбросить access token', 'google-indexing-manager' ); ?>
