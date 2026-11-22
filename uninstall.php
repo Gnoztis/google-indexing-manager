@@ -4,8 +4,8 @@
  *
  * Deletes only this plugin's own data:
  *   - its options (the encrypted service-account key, the hint, the schema
- *     marker, settings, statistics snapshots, daily counters, quota marks and
- *     worker locks);
+ *     marker, the encrypted OAuth access token and its expiry, settings,
+ *     statistics snapshots, daily counters, quota marks and worker locks);
  *   - its transients (access token, statistics cache, update-check cache);
  *   - its cron events;
  *   - the two tables gim_log and gim_unindexed;
@@ -33,6 +33,9 @@ function gim_uninstall_site(): void {
         'gim_json_key',
         'gim_json_key_hint',
         'gim_token_schema',
+        'gim_access_token',
+        'gim_access_token_expires',
+        'gim_access_token_schema',
         'gim_site_url',
         'gim_check_interval',
         'gim_night_start_hour',

@@ -7,12 +7,10 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-function gim_token_transient_key(): string {
-    return 'gim_access_token';
-}
-
 function gim_clear_token_cache(): void {
-    delete_transient( gim_token_transient_key() );
+    // The stored token is an AEAD ciphertext plus a plain expiry option; both
+    // are removed, together with the plaintext transient of older versions.
+    Gim_Access_Token::forget();
 
     // The per-request cache lives in a global so that clearing it also resets
     // the value already returned in this request.
@@ -65,16 +63,17 @@ function gim_normalize_private_key( string $key ): string {
 function gim_get_access_token(): ?string {
     // Per-request cache: a failed fetch is cached too, so a batch of URLs does
     // not repeat the OAuth request for every item. gim_clear_token_cache()
-    // drops both the transient and this value.
+    // drops both the stored ciphertext and this value.
     if ( array_key_exists( 'gim_access_token_cache', $GLOBALS ) ) {
         $cached = $GLOBALS['gim_access_token_cache'];
         return is_string( $cached ) ? $cached : null;
     }
 
-    $transient_key = gim_token_transient_key();
-    $cached        = get_transient( $transient_key );
+    // Stored token: an AEAD ciphertext with a plain expiry option. An expired
+    // or undecryptable value counts as "no token" and is dropped by the class.
+    $cached = Gim_Access_Token::get();
 
-    if ( is_string( $cached ) && $cached !== '' ) {
+    if ( '' !== $cached ) {
         $GLOBALS['gim_access_token_cache'] = $cached;
         return $cached;
     }
@@ -166,8 +165,19 @@ function gim_get_access_token(): ?string {
         return null;
     }
 
-    $token = (string) $data['access_token'];
-    set_transient( $transient_key, $token, 55 * MINUTE_IN_SECONDS );
+    $token    = (string) $data['access_token'];
+    $lifetime = isset( $data['expires_in'] ) ? (int) $data['expires_in'] : 0;
+
+    if ( ! Gim_Access_Token::store( $token, $lifetime ) ) {
+        // No encryption key or no AEAD primitive: keep the token for this
+        // request only. Never fall back to plaintext storage.
+        static $not_stored_logged = false;
+
+        if ( ! $not_stored_logged ) {
+            $not_stored_logged = true;
+            gim_log_debug( 'Access token не закэширован между запросами: шифрование недоступно' );
+        }
+    }
 
     $GLOBALS['gim_access_token_cache'] = $token;
     return $token;

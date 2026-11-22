@@ -56,6 +56,21 @@ final class Gim_Token_Crypto {
     /** Key derivation context; also the base of the additional data. */
     private const INFO = 'gim|json_key|v1';
 
+    /**
+     * Additional data of the service-account JSON. Fixed by the SEC-003
+     * contract: a ciphertext cannot be moved to another option or plugin.
+     */
+    public const AAD_JSON_KEY = 'gim|json_key|v1|gim_json_key';
+
+    /**
+     * Additional data of the OAuth access-token cache.
+     *
+     * The key material is the same as for the JSON key; the AAD binds the value
+     * to this purpose, so a token ciphertext can never be read as a key (or
+     * the other way round).
+     */
+    public const AAD_ACCESS_TOKEN = 'gim|access_token|v1|gim_access_token';
+
     private const SCHEMA    = 1;
     private const KEY_BYTES = 32;
     private const IV_BYTES  = 12;
@@ -194,13 +209,6 @@ final class Gim_Token_Crypto {
     }
 
     /**
-     * Additional data of the AEAD: binds the plugin and the option name.
-     */
-    private static function additional_data(): string {
-        return self::INFO . '|' . self::OPTION;
-    }
-
-    /**
      * Whether at least one rung of the cipher ladder is usable.
      */
     private static function cipher_available(): bool {
@@ -237,9 +245,11 @@ final class Gim_Token_Crypto {
      * Encrypts a value.
      *
      * @param string $plaintext Value to encrypt.
+     * @param string $additional_data AEAD additional data; defaults to the
+     *                                service-account JSON binding.
      * @return string "v1?:" prefixed value, empty string on failure.
      */
-    public static function encrypt( string $plaintext ): string {
+    public static function encrypt( string $plaintext, string $additional_data = self::AAD_JSON_KEY ): string {
         if ( '' === $plaintext ) {
             return '';
         }
@@ -249,8 +259,6 @@ final class Gim_Token_Crypto {
             self::note_error( 'no_key' );
             return '';
         }
-
-        $additional_data = self::additional_data();
 
         // 1. sodium_crypto_aead_xchacha20poly1305_ietf — the preferred AEAD.
         if ( self::sodium_aead_available() ) {
@@ -308,10 +316,12 @@ final class Gim_Token_Crypto {
      * Decrypts a stored value.
      *
      * @param string $stored "v1?:" prefixed value.
+     * @param string $additional_data AEAD additional data; must match the value
+     *                                used by encrypt().
      * @return string Clear text, empty string on any failure (wrong key, flipped
      *                byte, foreign AAD, malformed value).
      */
-    public static function decrypt( string $stored ): string {
+    public static function decrypt( string $stored, string $additional_data = self::AAD_JSON_KEY ): string {
         $stored = trim( $stored );
 
         if ( '' === $stored ) {
@@ -339,8 +349,7 @@ final class Gim_Token_Crypto {
             return '';
         }
 
-        $additional_data = self::additional_data();
-        $plain           = '';
+        $plain = '';
 
         switch ( $prefix ) {
             case self::PREFIX_SODIUM_AEAD:

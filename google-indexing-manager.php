@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Google Indexing Manager
  * Description:       Проверяет не проиндексированные URL и отправляет их на повторную индексацию через Google API.
- * Version:           1.12.0
+ * Version:           1.12.1
  * Requires at least: 7.0
  * Requires PHP:      8.4
  * Tested up to:      7.1
@@ -21,7 +21,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'GIM_VERSION', '1.12.0' );
+define( 'GIM_VERSION', '1.12.1' );
 define( 'GIM_PLUGIN_FILE', __FILE__ );
 define( 'GIM_DIR', __DIR__ );
 define( 'GIM_URL', plugin_dir_url( __FILE__ ) );
@@ -33,6 +33,7 @@ $gim_required_files = [
     'includes/class-logger.php',
     'includes/class-queue.php',
     'includes/class-gim-token-crypto.php',
+    'includes/class-gim-access-token.php',
     'includes/class-google-api.php',
     'includes/class-cron.php',
     'includes/class-gim-github-updater.php',
@@ -71,6 +72,8 @@ $gim_required_functions = [
     'gim_json_key_state'           => 'includes/class-gim-token-crypto.php',
     'gim_delete_json_key'          => 'includes/class-gim-token-crypto.php',
     'gim_token_crypto_init'        => 'includes/class-gim-token-crypto.php',
+    'gim_access_token_init'        => 'includes/class-gim-access-token.php',
+    'gim_access_token_migrate'     => 'includes/class-gim-access-token.php',
     'gim_get_access_token'         => 'includes/class-google-api.php',
     'gim_cron_init'                => 'includes/class-cron.php',
     'gim_cron_register_healthcheck' => 'includes/class-cron.php',
@@ -323,6 +326,7 @@ if ( ! empty( $gim_missing_files ) || ! empty( $gim_missing_functions ) ) {
 
     function gim_init(): void {
         gim_token_crypto_init();
+        gim_access_token_init();
         gim_updater_init();
         gim_admin_init();
         gim_ajax_init();

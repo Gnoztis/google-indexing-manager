@@ -599,7 +599,7 @@ final class GIM_GitHub_Updater {
                 'headers'     => [
                     'Accept'               => 'application/vnd.github+json',
                     'X-GitHub-Api-Version' => '2022-11-28',
-                    'User-Agent'           => 'Google-Indexing-Manager/' . ( defined( 'GIM_VERSION' ) ? GIM_VERSION : '1.12.0' ),
+                    'User-Agent'           => 'Google-Indexing-Manager/' . ( defined( 'GIM_VERSION' ) ? GIM_VERSION : '1.12.1' ),
                 ],
             ]
         );
