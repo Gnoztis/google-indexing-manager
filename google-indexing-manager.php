@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Google Indexing Manager
  * Description:       Проверяет не проиндексированные URL и отправляет их на повторную индексацию через Google API.
- * Version:           1.12.3
+ * Version:           1.12.4
  * Requires at least: 7.0
  * Requires PHP:      8.4
  * Tested up to:      7.1
@@ -21,7 +21,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'GIM_VERSION', '1.12.3' );
+define( 'GIM_VERSION', '1.12.4' );
 define( 'GIM_PLUGIN_FILE', __FILE__ );
 define( 'GIM_DIR', __DIR__ );
 define( 'GIM_URL', plugin_dir_url( __FILE__ ) );
