@@ -3,7 +3,7 @@
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: Google Indexing Manager 1.12.1\n"
+"Project-Id-Version: Google Indexing Manager 1.12.2\n"
 "Report-Msgid-Bugs-To: https://github.com/Gnoztis/google-indexing-manager/issues\n"
 "POT-Creation-Date: 2026-11-23T00:00:00+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
@@ -800,16 +800,68 @@ msgstr ""
 msgid "Every 15 Minutes (GIM)"
 msgstr ""
 
-#: includes/class-gim-github-updater.php:261
-msgid "Отправляет не проиндексированные URL в Google Indexing API и проверяет статус через URL Inspection API. Ключ сервисного аккаунта хранится в зашифрованном виде."
+#: includes/class-gim-github-updater.php:267
+msgid "Проверяет не проиндексированные URL и отправляет их на повторную индексацию через Google API."
 msgstr ""
 
-#: includes/class-gim-github-updater.php:264
-msgid "В релизе нет описания изменений."
+#: includes/class-gim-github-updater.php:268
+msgid "Описание изменений в релизе не заполнено."
 msgstr ""
 
-#: includes/class-gim-github-updater.php:395
+#: includes/class-gim-github-updater.php:438
 msgid "Проверить обновления"
+msgstr ""
+
+#: includes/class-gim-github-updater.php:466
+msgid "Google Indexing Manager: проверка обновлений не удалась."
+msgstr ""
+
+#: includes/class-gim-github-updater.php:878
+msgid "лимит GitHub API"
+msgstr ""
+
+#: includes/class-gim-github-updater.php:879
+msgid "репозиторий или тег не найдены"
+msgstr ""
+
+#: includes/class-gim-github-updater.php:880
+msgid "токен отклонён"
+msgstr ""
+
+#: includes/class-gim-github-updater.php:881
+msgid "нет связи с GitHub"
+msgstr ""
+
+#: includes/class-gim-github-updater.php:882
+msgid "неожиданный ответ GitHub"
+msgstr ""
+
+#: includes/class-gim-github-updater.php:883
+msgid "неизвестная ошибка"
+msgstr ""
+
+#: includes/class-gim-github-updater.php:891
+msgid "проверка не удалась: %1$s (%2$s)"
+msgstr ""
+
+#: includes/class-gim-github-updater.php:905
+msgid "Задайте GIM_GITHUB_TOKEN в wp-config.php: без токена GitHub разрешает 60 запросов в час на IP, с токеном — 5000."
+msgstr ""
+
+#: includes/class-gim-github-updater.php:907
+msgid "Проверьте, что тег вида vX.Y.Z существует в репозитории и репозиторий доступен без авторизации."
+msgstr ""
+
+#: includes/class-gim-github-updater.php:909
+msgid "Проверьте GIM_GITHUB_TOKEN: токен должен иметь доступ на чтение публичного репозитория."
+msgstr ""
+
+#: includes/class-gim-github-updater.php:911
+msgid "Хостинг не смог открыть api.github.com: проверьте исходящие запросы и DNS."
+msgstr ""
+
+#: includes/class-gim-github-updater.php:913
+msgid "Повторите проверку позже; если ошибка повторяется, посмотрите ответ api.github.com."
 msgstr ""
 
 #: includes/class-gim-token-crypto.php:148

@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Google Indexing Manager
  * Description:       Проверяет не проиндексированные URL и отправляет их на повторную индексацию через Google API.
- * Version:           1.12.1
+ * Version:           1.12.2
  * Requires at least: 7.0
  * Requires PHP:      8.4
  * Tested up to:      7.1
@@ -21,13 +21,34 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'GIM_VERSION', '1.12.1' );
+define( 'GIM_VERSION', '1.12.2' );
 define( 'GIM_PLUGIN_FILE', __FILE__ );
 define( 'GIM_DIR', __DIR__ );
 define( 'GIM_URL', plugin_dir_url( __FILE__ ) );
 define( 'GIM_SLUG', 'google-indexing-manager' );
 define( 'GIM_DB_VERSION', 6 );
 define( 'GIM_CRON_VERSION', 8 );
+
+/**
+ * Registers the GitHub updater.
+ *
+ * The class itself is a generated file (tools/shared/updater, synced with
+ * `node tools/scripts/sync-updater.mjs google-indexing-manager`); it must never
+ * be edited by hand. The instantiation lives here so the plugin has one clear
+ * place that wires the updater to WordPress.
+ */
+function gim_updater_init(): void {
+    static $registered = false;
+
+    if ( $registered || ! class_exists( 'GIM_GitHub_Updater' ) ) {
+        return;
+    }
+
+    $registered = true;
+
+    $updater = new GIM_GitHub_Updater();
+    $updater->register_hooks();
+}
 
 $gim_required_files = [
     'includes/class-logger.php',
@@ -77,7 +98,7 @@ $gim_required_functions = [
     'gim_get_access_token'         => 'includes/class-google-api.php',
     'gim_cron_init'                => 'includes/class-cron.php',
     'gim_cron_register_healthcheck' => 'includes/class-cron.php',
-    'gim_updater_init'             => 'includes/class-gim-github-updater.php',
+    'gim_updater_init'             => 'google-indexing-manager.php',
     'gim_admin_init'               => 'includes/class-admin.php',
     'gim_render_stats'             => 'includes/admin/admin-stats.php',
     'gim_render_urls'              => 'includes/admin/admin-urls.php',
