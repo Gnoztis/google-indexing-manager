@@ -291,7 +291,7 @@ function gim_render_settings(): void {
                 <td>
                     <fieldset>
                         <?php foreach ( $public_post_types as $pt ) : ?>
-                            <label style="display:block; margin-bottom:6px;">
+                            <label class="gim-check gim-check--stacked">
                                 <input type="checkbox"
                                        name="gim_post_types[<?php echo esc_attr( $pt->name ); ?>]"
                                        value="<?php echo esc_attr( $pt->name ); ?>"

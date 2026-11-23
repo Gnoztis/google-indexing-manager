@@ -28,6 +28,7 @@ function gim_ajax_init(): void {
         'gim_recompute_exclusions' => 'gim_ajax_recompute_exclusions',
         'gim_save_stats_order'     => 'gim_ajax_save_stats_order',
         'gim_purge_logs'           => 'gim_ajax_purge_logs',
+        'gim_restore_backup'       => 'gim_ajax_restore_backup',
     ];
 
     foreach ( $actions as $action => $callback ) {
@@ -318,6 +319,36 @@ function gim_ajax_purge_logs(): void {
         gim_log_exception( $e );
         gim_ajax_error( 'Не удалось очистить лог. Подробности — в логе.', 500 );
     }
+}
+
+/* -------------------------------------------------------------------------
+ * Восстановление статусов из резервной копии.
+ * ---------------------------------------------------------------------- */
+
+function gim_ajax_restore_backup(): void {
+    gim_ajax_guard();
+
+    $backup = isset( $_POST['backup'] ) ? sanitize_text_field( wp_unslash( $_POST['backup'] ) ) : '';
+
+    if ( '' === $backup ) {
+        gim_ajax_error( 'Не указана резервная копия.' );
+    }
+
+    // Only a table recorded at migration time is accepted; the helper checks
+    // the list again, so a forged table name can never be touched.
+    $result = gim_restore_queue_backup( $backup );
+
+    if ( empty( $result['ok'] ) ) {
+        gim_ajax_error( $result['message'], 422 );
+    }
+
+    gim_ajax_success(
+        $result['message'],
+        [
+            'updated'  => (int) $result['updated'],
+            'inserted' => (int) $result['inserted'],
+        ]
+    );
 }
 
 /* -------------------------------------------------------------------------

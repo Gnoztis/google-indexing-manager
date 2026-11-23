@@ -1188,24 +1188,57 @@ html {
 }
 
 /* -------------------------------------------------------------------------
- * Diagnostics: the Indexing API probe spends real quota, so it is an explicit
- * opt-in checkbox with a readable target.
+ * Checkboxes with a text label.
+ *
+ * One geometry for every labelled checkbox in the plugin (the diagnostics
+ * probe and the content-type list). The box is explicitly 16px and is centred
+ * on the FIRST line box of the text: line-height 1.6 × 13px = 20.8px, so the
+ * top margin is (20.8 − 16) / 2 = 2.4px. `align-items: flex-start` is kept on
+ * purpose: when the label wraps to two or three lines at 320px, the box stays
+ * next to the first line instead of drifting to the middle of the paragraph.
+ * `min-height: 24px` keeps the clickable target at least 24px high; the whole
+ * label is the target because the label wraps the input.
  * ---------------------------------------------------------------------- */
 
-.gim-diagnostic-probe {
+.gim-check {
     display: inline-flex;
     align-items: flex-start;
     gap: 8px;
+    max-width: 100%;
     min-height: 24px;
     padding: 2px 0;
+    box-sizing: border-box;
     font-size: 13px;
     line-height: 1.6;
     color: #50575e;
     cursor: pointer;
 }
 
-.gim-diagnostic-probe input {
-    margin-top: 3px;
+.gim-check > input[type="checkbox"] {
     flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+    margin: 2.4px 0 0;
+    padding: 0;
+    cursor: pointer;
+}
+
+/* A list of labelled checkboxes: one row per item. */
+.gim-check--stacked {
+    display: flex;
+    margin-bottom: 6px;
+}
+
+/* Checkboxes without a text label (table header and row selectors): the same
+   16px box, centred by the table cell. */
+.gim-col-checkbox input[type="checkbox"] {
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+    margin: 0 !important;
+    padding: 0 !important;
+    display: inline-block;
+    vertical-align: middle;
+    cursor: pointer;
 }
 

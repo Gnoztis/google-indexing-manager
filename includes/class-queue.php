@@ -698,6 +698,317 @@ function gim_clear_all_urls(): int {
 }
 
 /* -------------------------------------------------------------------------
+ * Резервные копии таблицы URL.
+ *
+ * Схема меняется только аддитивно, но перед миграцией непустая очередь всё
+ * равно копируется: таблица хранит историю проверок, и восстановить её из
+ * WordPress нельзя. Копия — обычная таблица `…_gim_unindexed_bak_<версия>`,
+ * её имя записывается в опцию, диагностика показывает копии и умеет
+ * восстанавливать строки.
+ * ---------------------------------------------------------------------- */
+
+const GIM_MAX_DB_BACKUPS = 3;
+
+/**
+ * Table name of the backup created before a migration from $version.
+ */
+function gim_db_backup_table_name( int $version ): string {
+    global $wpdb;
+
+    return $wpdb->prefix . 'gim_unindexed_bak_' . max( 0, $version );
+}
+
+/**
+ * Recorded backups, newest last. Entries that do not point at a table with our
+ * prefix are dropped from the list.
+ *
+ * @return array<int, array{table:string,from:int,to:int,rows:int,created:int}>
+ */
+function gim_db_backups(): array {
+    global $wpdb;
+
+    $stored = get_option( 'gim_db_backups', [] );
+
+    if ( ! is_array( $stored ) ) {
+        return [];
+    }
+
+    $prefix = $wpdb->prefix . 'gim_unindexed_bak_';
+    $out    = [];
+
+    foreach ( $stored as $entry ) {
+        if ( ! is_array( $entry ) || empty( $entry['table'] ) ) {
+            continue;
+        }
+
+        $table = (string) $entry['table'];
+
+        if ( 0 !== strpos( $table, $prefix ) ) {
+            continue;
+        }
+
+        $out[] = [
+            'table'   => $table,
+            'from'    => (int) ( $entry['from'] ?? 0 ),
+            'to'      => (int) ( $entry['to'] ?? 0 ),
+            'rows'    => (int) ( $entry['rows'] ?? 0 ),
+            'created' => (int) ( $entry['created'] ?? 0 ),
+        ];
+    }
+
+    return $out;
+}
+
+/**
+ * Backups with their current row counts, for the diagnostics screen.
+ *
+ * @return array<int, array{table:string,from:int,to:int,rows:int,created:int,exists:bool}>
+ */
+function gim_db_backups_report(): array {
+    global $wpdb;
+
+    $out = [];
+
+    foreach ( gim_db_backups() as $backup ) {
+        $exists = ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $backup['table'] ) ) === $backup['table'] );
+
+        $rows = $backup['rows'];
+
+        if ( $exists ) {
+            // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- literal COUNT; the table name comes from our own option and the prefix check above.
+            $rows = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$backup['table']}" );
+        }
+
+        $backup['rows']   = $rows;
+        $backup['exists'] = $exists;
+        $out[]            = $backup;
+    }
+
+    return $out;
+}
+
+/**
+ * Copies a non-empty queue table before a migration.
+ *
+ * @param int $from_version Installed schema version.
+ * @param int $to_version   Target schema version.
+ * @return array{created:bool,table:string,rows:int,reason:string}
+ */
+function gim_backup_queue_table( int $from_version, int $to_version ): array {
+    global $wpdb;
+
+    $table = $wpdb->prefix . 'gim_unindexed';
+
+    if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ) !== $table ) {
+        return [ 'created' => false, 'table' => '', 'rows' => 0, 'reason' => 'таблицы ещё нет' ];
+    }
+
+    // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- literal COUNT; the table name comes from $wpdb->prefix.
+    $rows = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table}" );
+
+    if ( $rows === 0 ) {
+        return [ 'created' => false, 'table' => '', 'rows' => 0, 'reason' => 'таблица пуста' ];
+    }
+
+    $backup = gim_db_backup_table_name( $from_version );
+
+    // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL; the name is built from $wpdb->prefix and an integer.
+    $wpdb->query( "DROP TABLE IF EXISTS {$backup}" );
+
+    // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL; both names come from $wpdb->prefix.
+    $created = $wpdb->query( "CREATE TABLE {$backup} LIKE {$table}" );
+
+    if ( false === $created ) {
+        gim_log_error( 'Миграция схемы: не удалось создать резервную копию таблицы URL' );
+        return [ 'created' => false, 'table' => '', 'rows' => 0, 'reason' => 'ошибка создания копии' ];
+    }
+
+    // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- literal INSERT … SELECT; both names come from $wpdb->prefix.
+    $copied = $wpdb->query( "INSERT INTO {$backup} SELECT * FROM {$table}" );
+
+    if ( false === $copied ) {
+        gim_log_error( 'Миграция схемы: резервная копия таблицы URL создана, но данные не скопированы' );
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL; the name is built from $wpdb->prefix and an integer.
+        $wpdb->query( "DROP TABLE IF EXISTS {$backup}" );
+        return [ 'created' => false, 'table' => '', 'rows' => 0, 'reason' => 'ошибка копирования' ];
+    }
+
+    $list   = gim_db_backups();
+    $list[] = [
+        'table'   => $backup,
+        'from'    => $from_version,
+        'to'      => $to_version,
+        'rows'    => $rows,
+        'created' => time(),
+    ];
+
+    update_option( 'gim_db_backups', array_slice( $list, -GIM_MAX_DB_BACKUPS ), false );
+
+    gim_prune_db_backups();
+
+    return [ 'created' => true, 'table' => $backup, 'rows' => $rows, 'reason' => '' ];
+}
+
+/**
+ * Drops backup tables that are no longer in the recorded list, keeping at most
+ * GIM_MAX_DB_BACKUPS copies.
+ */
+function gim_prune_db_backups(): void {
+    global $wpdb;
+
+    $keep   = array_column( gim_db_backups(), 'table' );
+    $prefix = $wpdb->prefix . 'gim_unindexed_bak_';
+
+    // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- SHOW TABLES LIKE with a prepared pattern.
+    $found = $wpdb->get_col( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $prefix ) . '%' ) );
+
+    if ( ! is_array( $found ) ) {
+        return;
+    }
+
+    foreach ( $found as $table ) {
+        $table = (string) $table;
+
+        if ( in_array( $table, $keep, true ) || 0 !== strpos( $table, $prefix ) ) {
+            continue;
+        }
+
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL; the name passed the prefix check above.
+        $wpdb->query( "DROP TABLE IF EXISTS {$table}" );
+    }
+}
+
+/**
+ * Makes a backup table restorable: ensures it has url_hash and fills it.
+ *
+ * A backup is created before the hash column exists, so it may lack both the
+ * column and the values. MySQL SHA2(url, 256) is the same hex digest as
+ * hash('sha256', $url) in PHP.
+ */
+function gim_prepare_backup_for_restore( string $backup ): bool {
+    global $wpdb;
+
+    if ( ! gim_is_recorded_backup( $backup ) ) {
+        return false;
+    }
+
+    $column = $wpdb->get_var( $wpdb->prepare( "SHOW COLUMNS FROM {$backup} LIKE %s", 'url_hash' ) );
+
+    if ( null === $column ) {
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL; the name was checked against the recorded list.
+        $wpdb->query( "ALTER TABLE {$backup} ADD COLUMN url_hash char(64) NOT NULL DEFAULT ''" );
+    }
+
+    // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- literal UPDATE; the name was checked against the recorded list.
+    $wpdb->query( "UPDATE {$backup} SET url_hash = SHA2(url, 256) WHERE url_hash = ''" );
+
+    // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- SHOW INDEX; the name was checked against the recorded list.
+    $index = $wpdb->get_results( "SHOW INDEX FROM {$backup} WHERE Key_name = 'gim_bak_hash'", ARRAY_A );
+
+    if ( ! is_array( $index ) || empty( $index ) ) {
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL; the name was checked against the recorded list.
+        $wpdb->query( "ALTER TABLE {$backup} ADD INDEX gim_bak_hash (url_hash)" );
+    }
+
+    return true;
+}
+
+/**
+ * Whether the table is one of the recorded backups (never trust raw input).
+ */
+function gim_is_recorded_backup( string $table ): bool {
+    foreach ( gim_db_backups() as $backup ) {
+        if ( $backup['table'] === $table ) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
+ * Copies statuses back from a backup.
+ *
+ * Only rows that are currently unchecked (`indexed IS NULL`) receive the
+ * backup status: a row that was checked after the migration is newer than the
+ * copy and must not be rolled back. Rows that are missing entirely are
+ * re-inserted.
+ *
+ * @param string $backup Recorded backup table name.
+ * @return array{ok:bool,updated:int,inserted:int,message:string}
+ */
+function gim_restore_queue_backup( string $backup ): array {
+    global $wpdb;
+
+    $backup = trim( $backup );
+
+    if ( ! gim_is_recorded_backup( $backup ) ) {
+        return [ 'ok' => false, 'updated' => 0, 'inserted' => 0, 'message' => 'Резервная копия не найдена в списке.' ];
+    }
+
+    if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $backup ) ) !== $backup ) {
+        return [ 'ok' => false, 'updated' => 0, 'inserted' => 0, 'message' => 'Таблица резервной копии отсутствует.' ];
+    }
+
+    gim_prepare_backup_for_restore( $backup );
+
+    $table = $wpdb->prefix . 'gim_unindexed';
+
+    // 1. Rows that survived the migration but lost their status.
+    // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- both table names are validated above; the join is on the unique hash.
+    $updated = $wpdb->query(
+        "UPDATE {$table} t
+         INNER JOIN {$backup} b ON b.url_hash = t.url_hash
+         SET t.indexed = b.indexed,
+             t.coverage = b.coverage,
+             t.checked_at = b.checked_at,
+             t.sent_at = COALESCE( t.sent_at, b.sent_at ),
+             t.excluded = b.excluded
+         WHERE t.indexed IS NULL
+           AND b.indexed IS NOT NULL
+           AND b.url_hash <> ''"
+    );
+
+    if ( false === $updated ) {
+        return [ 'ok' => false, 'updated' => 0, 'inserted' => 0, 'message' => 'Не удалось обновить строки из копии.' ];
+    }
+
+    // 2. Rows that disappeared with the old table.
+    // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- both table names are validated above.
+    $inserted = $wpdb->query(
+        "INSERT INTO {$table} (url, url_hash, indexed, coverage, checked_at, sent_at, excluded)
+         SELECT b.url, b.url_hash, b.indexed, b.coverage, b.checked_at, b.sent_at, b.excluded
+         FROM {$backup} b
+         LEFT JOIN {$table} t ON t.url_hash = b.url_hash
+         WHERE t.id IS NULL
+           AND b.url_hash <> ''"
+    );
+
+    if ( false === $inserted ) {
+        $inserted = 0;
+    }
+
+    gim_invalidate_stats_cache();
+    gim_force_refresh_stats_snapshot();
+
+    gim_log_info(
+        sprintf(
+            'Восстановление из резервной копии %s: обновлено %d, добавлено %d строк',
+            $backup,
+            (int) $updated,
+            (int) $inserted
+        )
+    );
+
+    return [
+        'ok'       => true,
+        'updated'  => (int) $updated,
+        'inserted' => (int) $inserted,
+        'message'  => sprintf( 'Восстановлено: обновлено %d, добавлено %d строк.', (int) $updated, (int) $inserted ),
+    ];
+}
+
+/* -------------------------------------------------------------------------
  * Выборки URL.
  * ---------------------------------------------------------------------- */
 

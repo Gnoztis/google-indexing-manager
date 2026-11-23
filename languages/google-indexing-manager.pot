@@ -3,7 +3,7 @@
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: Google Indexing Manager 1.12.5\n"
+"Project-Id-Version: Google Indexing Manager 1.13.0\n"
 "Report-Msgid-Bugs-To: https://github.com/Gnoztis/google-indexing-manager/issues\n"
 "POT-Creation-Date: 2026-11-23T00:00:00+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
@@ -132,6 +132,42 @@ msgstr ""
 
 #: includes/admin/admin-diagnostic.php:113
 msgid "Не проверено."
+msgstr ""
+
+#: includes/admin/admin-diagnostic.php:135
+msgid "Резервные копии таблицы URL"
+msgstr ""
+
+#: includes/admin/admin-diagnostic.php:139
+msgid "Копий нет: миграции схемы ещё не выполнялись или очередь была пуста."
+msgstr ""
+
+#: includes/admin/admin-diagnostic.php:147
+msgid "Таблица"
+msgstr ""
+
+#: includes/admin/admin-diagnostic.php:148
+msgid "Схема"
+msgstr ""
+
+#: includes/admin/admin-diagnostic.php:149
+msgid "Строк"
+msgstr ""
+
+#: includes/admin/admin-diagnostic.php:150
+msgid "Создана"
+msgstr ""
+
+#: includes/admin/admin-diagnostic.php:151
+msgid "Действие"
+msgstr ""
+
+#: includes/admin/admin-diagnostic.php:174
+msgid "Восстановить"
+msgstr ""
+
+#: includes/admin/admin-diagnostic.php:183
+msgid "Восстановление возвращает статусы только тем URL, у которых статуса сейчас нет (indexed IS NULL): более свежие проверки не перезаписываются. Отсутствующие строки добавляются заново."
 msgstr ""
 
 #: includes/admin/admin-logs.php:44
@@ -800,103 +836,103 @@ msgstr ""
 msgid "Настройки"
 msgstr ""
 
-#: includes/class-cron.php:105
+#: includes/class-cron.php:119
 msgid "Every 15 Minutes (GIM)"
 msgstr ""
 
-#: includes/class-gim-github-updater.php:356
+#: includes/class-gim-github-updater.php:366
 msgid "Проверяет не проиндексированные URL и отправляет их на повторную индексацию через Google API."
 msgstr ""
 
-#: includes/class-gim-github-updater.php:357
+#: includes/class-gim-github-updater.php:367
 msgid "Описание изменений в релизе не заполнено."
 msgstr ""
 
-#: includes/class-gim-github-updater.php:411
+#: includes/class-gim-github-updater.php:421
 msgid "Архив обновления распакован в небезопасный путь — установка отменена."
 msgstr ""
 
-#: includes/class-gim-github-updater.php:425
+#: includes/class-gim-github-updater.php:435
 msgid "Распакованный архив выходит за пределы каталога WordPress — установка отменена."
 msgstr ""
 
-#: includes/class-gim-github-updater.php:434
+#: includes/class-gim-github-updater.php:444
 msgid "В архиве обновления нет главного файла плагина — установка отменена."
 msgstr ""
 
-#: includes/class-gim-github-updater.php:449
+#: includes/class-gim-github-updater.php:459
 msgid "Архив содержит версию %1$s, а установлена %2$s: установка старых версий запрещена."
 msgstr ""
 
-#: includes/class-gim-github-updater.php:474
+#: includes/class-gim-github-updater.php:484
 msgid "Каталог установки вне каталога плагинов — установка отменена."
 msgstr ""
 
-#: includes/class-gim-github-updater.php:490
+#: includes/class-gim-github-updater.php:500
 msgid "Нет доступа к файловой системе — установка отменена, плагин не тронут."
 msgstr ""
 
-#: includes/class-gim-github-updater.php:497
+#: includes/class-gim-github-updater.php:507
 msgid "Не удалось переименовать каталог обновления — установка отменена, установленный плагин не тронут."
 msgstr ""
 
-#: includes/class-gim-github-updater.php:508
+#: includes/class-gim-github-updater.php:518
 msgid "После распаковки в каталоге нет главного файла — установка отменена, изменения отменены."
 msgstr ""
 
-#: includes/class-gim-github-updater.php:666
+#: includes/class-gim-github-updater.php:766
 msgid "Проверить обновления"
 msgstr ""
 
-#: includes/class-gim-github-updater.php:694
+#: includes/class-gim-github-updater.php:794
 msgid "Google Indexing Manager: проверка обновлений не удалась."
 msgstr ""
 
-#: includes/class-gim-github-updater.php:1106
+#: includes/class-gim-github-updater.php:1206
 msgid "лимит GitHub API"
 msgstr ""
 
-#: includes/class-gim-github-updater.php:1107
+#: includes/class-gim-github-updater.php:1207
 msgid "репозиторий или тег не найдены"
 msgstr ""
 
-#: includes/class-gim-github-updater.php:1108
+#: includes/class-gim-github-updater.php:1208
 msgid "токен отклонён"
 msgstr ""
 
-#: includes/class-gim-github-updater.php:1109
+#: includes/class-gim-github-updater.php:1209
 msgid "нет связи с GitHub"
 msgstr ""
 
-#: includes/class-gim-github-updater.php:1110
+#: includes/class-gim-github-updater.php:1210
 msgid "неожиданный ответ GitHub"
 msgstr ""
 
-#: includes/class-gim-github-updater.php:1111
+#: includes/class-gim-github-updater.php:1211
 msgid "неизвестная ошибка"
 msgstr ""
 
-#: includes/class-gim-github-updater.php:1119
+#: includes/class-gim-github-updater.php:1219
 msgid "проверка не удалась: %1$s (%2$s)"
 msgstr ""
 
-#: includes/class-gim-github-updater.php:1133
+#: includes/class-gim-github-updater.php:1233
 msgid "Задайте GIM_GITHUB_TOKEN в wp-config.php: без токена GitHub разрешает 60 запросов в час на IP, с токеном — 5000."
 msgstr ""
 
-#: includes/class-gim-github-updater.php:1135
+#: includes/class-gim-github-updater.php:1235
 msgid "Проверьте, что тег вида vX.Y.Z существует и репозиторий доступен текущему токену: приватный репозиторий без прав тоже отвечает 404."
 msgstr ""
 
-#: includes/class-gim-github-updater.php:1137
+#: includes/class-gim-github-updater.php:1237
 msgid "Проверьте GIM_GITHUB_TOKEN: токен должен иметь доступ на чтение этого репозитория."
 msgstr ""
 
-#: includes/class-gim-github-updater.php:1139
+#: includes/class-gim-github-updater.php:1239
 msgid "Хостинг не смог открыть api.github.com: проверьте исходящие запросы и DNS."
 msgstr ""
 
-#: includes/class-gim-github-updater.php:1141
+#: includes/class-gim-github-updater.php:1241
 msgid "Повторите проверку позже; если ошибка повторяется, посмотрите ответ api.github.com."
 msgstr ""
 
@@ -912,22 +948,22 @@ msgstr ""
 msgid "в PHP нет ни sodium, ни openssl с aes-256-gcm"
 msgstr ""
 
-#: includes/class-gim-token-crypto.php:1103
+#: includes/class-gim-token-crypto.php:1105
 msgid "Ключ не задан."
 msgstr ""
 
-#: includes/class-gim-token-crypto.php:1115
+#: includes/class-gim-token-crypto.php:1117
 msgid "JSON-ключ невалиден: %s"
 msgstr ""
 
-#: includes/class-gim-token-crypto.php:1128
+#: includes/class-gim-token-crypto.php:1130
 msgid "JSON-ключ не является ключом сервисного аккаунта: нет client_email или private_key."
 msgstr ""
 
-#: includes/class-gim-token-crypto.php:1136
+#: includes/class-gim-token-crypto.php:1138
 msgid "client_email не похож на адрес сервисного аккаунта."
 msgstr ""
 
-#: includes/class-gim-token-crypto.php:1148
+#: includes/class-gim-token-crypto.php:1150
 msgid "private_key не похож на PEM-ключ RSA."
 msgstr ""

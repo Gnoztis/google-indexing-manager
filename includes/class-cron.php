@@ -91,7 +91,21 @@ function gim_cron_register_healthcheck(): void {
     );
 }
 
+/**
+ * Self-healing entry point: restores every missing worker chain.
+ *
+ * Runs on admin_init behind an hourly transient. Before 1.13.0 the chains were
+ * only scheduled on activation, so after a failed update (or a wiped cron
+ * array) nothing came back on its own and the queue silently stopped.
+ * The throttle keeps the audit to one check per hour per site.
+ */
 function gim_cron_healthcheck_bootstrap(): void {
+    if ( get_transient( 'gim_cron_audit' ) ) {
+        return;
+    }
+
+    set_transient( 'gim_cron_audit', 1, HOUR_IN_SECONDS );
+
     gim_cron_register_healthcheck();
     gim_ensure_workers_scheduled();
 }

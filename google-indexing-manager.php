@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Google Indexing Manager
  * Description:       Проверяет не проиндексированные URL и отправляет их на повторную индексацию через Google API.
- * Version:           1.12.7
+ * Version:           1.13.0
  * Requires at least: 7.0
  * Requires PHP:      8.0
  * Tested up to:      7.1
@@ -21,7 +21,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'GIM_VERSION', '1.12.7' );
+define( 'GIM_VERSION', '1.13.0' );
 define( 'GIM_PLUGIN_FILE', __FILE__ );
 define( 'GIM_DIR', __DIR__ );
 define( 'GIM_URL', plugin_dir_url( __FILE__ ) );
@@ -119,7 +119,16 @@ foreach ( $gim_required_functions as $gim_function => $gim_source ) {
  * Схема БД.
  * ---------------------------------------------------------------------- */
 
-function gim_create_tables( bool $recreate_unindexed = false ): void {
+/**
+ * Creates or updates the plugin tables. Additive only.
+ *
+ * There is deliberately no DROP here: the queue table holds the verification
+ * history, and a migration that drops it (as 1.12.4 and earlier did on
+ * activation and in the upgrade path) destroys every status forever — the sync
+ * can only refill URLs as "unchecked". Schema changes are made with ALTER TABLE
+ * (see gim_maybe_upgrade_url_hash()) and dbDelta, which never removes rows.
+ */
+function gim_create_tables(): void {
     global $wpdb;
     $charset = $wpdb->get_charset_collate();
 
@@ -135,11 +144,6 @@ function gim_create_tables( bool $recreate_unindexed = false ): void {
         KEY gim_idx_level_id (level, id),
         KEY gim_idx_created_at (created_at)
     ) {$charset};";
-
-    if ( $recreate_unindexed ) {
-        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- DDL without placeholders; the table name comes from $wpdb->prefix.
-        $wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}gim_unindexed" );
-    }
 
     $table_unindexed = $wpdb->prefix . 'gim_unindexed';
     $sql_unindexed   = "CREATE TABLE {$table_unindexed} (
@@ -378,11 +382,36 @@ function gim_maybe_upgrade_schema(): void {
         return;
     }
 
+    $from = $current;
+
+    // Snapshot a non-empty queue before touching the schema: additive changes
+    // should not lose anything, but a backup makes the guarantee checkable and
+    // restorable.
+    $backup = gim_backup_queue_table( $from, GIM_DB_VERSION );
+
     // The hash migration must run before dbDelta: the column and the unique key
     // exist by the time the schema is compared.
     gim_maybe_upgrade_url_hash();
-    gim_create_tables( false );
+    gim_create_tables();
     gim_maybe_add_indexes();
+
+    // The cards read a stored snapshot: after a schema change it must reflect
+    // the live table again, otherwise the URL tab and the cards disagree
+    // (GIM-011).
+    if ( $from > 0 ) {
+        gim_force_refresh_stats_snapshot();
+    }
+
+    gim_log_info(
+        sprintf(
+            'Миграция схемы %d→%d: %s; восстановлено строк: 0',
+            $from,
+            GIM_DB_VERSION,
+            $backup['created']
+                ? sprintf( 'бэкап создан (%s, %d строк)', $backup['table'], $backup['rows'] )
+                : 'бэкап не нужен (' . $backup['reason'] . ')'
+        )
+    );
 }
 
 function gim_maybe_upgrade_cron(): void {
@@ -418,7 +447,9 @@ function gim_maybe_upgrade_cron(): void {
  * ---------------------------------------------------------------------- */
 
 function gim_activate(): void {
-    gim_create_tables( true );
+    // Additive: an active site that deactivates and reactivates the plugin keeps
+    // its queue and every verification status.
+    gim_create_tables();
 
     wp_clear_scheduled_hook( 'gim_cron_check_tick' );
     wp_clear_scheduled_hook( 'gim_cron_send_tick' );

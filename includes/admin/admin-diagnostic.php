@@ -75,7 +75,7 @@ function gim_render_diagnostic(): void {
     </p>
 
     <p class="gim-actions">
-        <label class="gim-diagnostic-probe" for="gim-diagnostic-probe">
+        <label class="gim-check gim-diagnostic-probe" for="gim-diagnostic-probe">
             <input type="checkbox" id="gim-diagnostic-probe" value="1" autocomplete="off">
             <?php esc_html_e( 'Выполнить пробную отправку URL в Indexing API (расходует 1 уведомление из суточной квоты)', 'google-indexing-manager' ); ?>
         </label>
@@ -118,5 +118,69 @@ function gim_render_diagnostic(): void {
     </table>
 
     <div id="gim-diagnostic-summary" class="gim-diagnostic-summary" hidden></div>
+
+    <?php gim_render_db_backups(); ?>
+    <?php
+}
+
+/**
+ * Backup tables created before a schema migration, with a restore action.
+ *
+ * The queue table holds the verification history; a migration copies it first
+ * and this block makes the copy usable instead of invisible.
+ */
+function gim_render_db_backups(): void {
+    $backups = gim_db_backups_report();
+    ?>
+    <h3 class="gim-backups-title"><?php esc_html_e( 'Резервные копии таблицы URL', 'google-indexing-manager' ); ?></h3>
+
+    <?php if ( empty( $backups ) ) : ?>
+        <p class="description">
+            <?php esc_html_e( 'Копий нет: миграции схемы ещё не выполнялись или очередь была пуста.', 'google-indexing-manager' ); ?>
+        </p>
+        <?php return; ?>
+    <?php endif; ?>
+
+    <table class="wp-list-table widefat fixed striped gim-backups-table">
+        <thead>
+        <tr>
+            <th><?php esc_html_e( 'Таблица', 'google-indexing-manager' ); ?></th>
+            <th style="width:110px;"><?php esc_html_e( 'Схема', 'google-indexing-manager' ); ?></th>
+            <th style="width:90px;"><?php esc_html_e( 'Строк', 'google-indexing-manager' ); ?></th>
+            <th style="width:150px;"><?php esc_html_e( 'Создана', 'google-indexing-manager' ); ?></th>
+            <th style="width:170px;"><?php esc_html_e( 'Действие', 'google-indexing-manager' ); ?></th>
+        </tr>
+        </thead>
+        <tbody>
+        <?php foreach ( $backups as $backup ) : ?>
+            <tr>
+                <td><code><?php echo esc_html( $backup['table'] ); ?></code></td>
+                <td><?php echo (int) $backup['from']; ?> → <?php echo (int) $backup['to']; ?></td>
+                <td><?php echo (int) $backup['rows']; ?></td>
+                <td>
+                    <?php
+                    if ( $backup['created'] > 0 ) {
+                        echo esc_html( wp_date( 'd.m.Y H:i', (int) $backup['created'] ) );
+                    } else {
+                        echo '—';
+                    }
+                    ?>
+                </td>
+                <td>
+                    <button type="button"
+                            class="button button-small gim-restore-backup"
+                            data-backup="<?php echo esc_attr( $backup['table'] ); ?>"
+                            <?php disabled( ! $backup['exists'] ); ?>>
+                        <?php esc_html_e( 'Восстановить', 'google-indexing-manager' ); ?>
+                    </button>
+                </td>
+            </tr>
+        <?php endforeach; ?>
+        </tbody>
+    </table>
+
+    <p class="description">
+        <?php esc_html_e( 'Восстановление возвращает статусы только тем URL, у которых статуса сейчас нет (indexed IS NULL): более свежие проверки не перезаписываются. Отсутствующие строки добавляются заново.', 'google-indexing-manager' ); ?>
+    </p>
     <?php
 }

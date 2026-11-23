@@ -50,6 +50,7 @@ function gim_uninstall_site(): void {
         'gim_cron_version',
         'gim_stats_current',
         'gim_stats_previous',
+        'gim_db_backups',
     ];
 
     foreach ( $options as $option ) {
@@ -116,6 +117,26 @@ function gim_uninstall_site(): void {
     foreach ( $tables as $table ) {
         // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery -- DDL without placeholders; the table name comes from $wpdb->prefix.
         $wpdb->query( "DROP TABLE IF EXISTS {$table}" );
+    }
+
+    // Backup tables created before schema migrations (…_gim_unindexed_bak_<v>).
+    $backup_prefix = $wpdb->prefix . 'gim_unindexed_bak_';
+    $backups       = $wpdb->get_col(
+        $wpdb->prepare(
+            'SHOW TABLES LIKE %s',
+            $wpdb->esc_like( $backup_prefix ) . '%'
+        )
+    );
+
+    if ( is_array( $backups ) ) {
+        foreach ( $backups as $backup ) {
+            if ( 0 !== strpos( (string) $backup, $backup_prefix ) ) {
+                continue;
+            }
+
+            // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery -- DDL; the name passed the prefix check above.
+            $wpdb->query( "DROP TABLE IF EXISTS {$backup}" );
+        }
     }
 
     // Per-user display preferences.
