@@ -91,3 +91,34 @@ function gim_log_warning( string $message, array $context = [] ): void {
 function gim_log_error( string $message, array $context = [] ): void {
     gim_log( 'error', $message, $context );
 }
+
+/**
+ * SEC-001 A09: one line per security event, no secrets.
+ *
+ * Events: nonce_failed, cap_denied, object_denied, github_rate_limit,
+ * github_unauthorized, github_forbidden. No e-mail, IP or request content.
+ */
+function gim_security_log( string $event, string $context = '' ): void {
+    if ( ! function_exists( 'error_log' ) ) {
+        return;
+    }
+
+    $line = '[gim] security: ' . $event;
+
+    if ( $context !== '' ) {
+        $line .= ' ' . str_replace( [ "\r", "\n" ], ' ', $context );
+    }
+
+    error_log( $line ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- A09 security event, no secrets.
+}
+
+/**
+ * SEC-001: exception detail for the server log, never for the client.
+ */
+function gim_log_exception( Throwable $e ): void {
+    if ( ! defined( 'WP_DEBUG' ) || ! WP_DEBUG || ! function_exists( 'error_log' ) ) {
+        return;
+    }
+
+    error_log( '[gim] internal: ' . $e->getMessage() ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- WP_DEBUG only.
+}

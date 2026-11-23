@@ -381,9 +381,10 @@ function gim_render_settings(): void {
                            min="0" max="3650" step="1" class="small-text">
                     <p class="description">
                         <?php
-                        esc_html_e(
-                            'Логи старше указанного срока удаляются автоматически раз в сутки в 04:00. 0 — хранить бессрочно (очистка не запускается).',
-                            'google-indexing-manager'
+                        printf(
+                            /* translators: %d: hard limit of stored log rows. */
+                            esc_html__( 'Логи старше указанного срока удаляются автоматически раз в сутки в 04:00. 0 — по возрасту не удалять, но всегда действует потолок: хранятся последние %d записей.', 'google-indexing-manager' ),
+                            (int) gim_get_log_max_rows()
                         );
                         ?>
                     </p>
@@ -488,7 +489,13 @@ function gim_render_settings(): void {
         </button>
     </p>
     <p class="description">
-        <?php esc_html_e( '«Очистить логи сейчас» удалит записи старше указанного срока хранения (поле выше). Если срок 0 — очистка не выполняется, потому что хранение бессрочное.', 'google-indexing-manager' ); ?>
+        <?php
+        printf(
+            /* translators: %d: hard limit of stored log rows. */
+            esc_html__( '«Очистить логи сейчас» удалит записи старше указанного срока хранения (поле выше) и лишние записи сверх потолка %d. Если срок 0 — удаляются только записи сверх потолка.', 'google-indexing-manager' ),
+            (int) gim_get_log_max_rows()
+        );
+        ?>
     </p>
     <?php
 }

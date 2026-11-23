@@ -360,7 +360,7 @@ function gim_render_urls(): void {
         <button type="button" class="button button-link" id="gim-bulk-clear">
             <?php esc_html_e( 'Снять выделение', 'google-indexing-manager' ); ?>
         </button>
-        <span class="gim-bulk-bar__progress" id="gim-bulk-progress"></span>
+        <span class="gim-bulk-bar__progress" id="gim-bulk-progress" role="status" aria-live="polite" aria-atomic="true"></span>
     </div>
     <?php
 }

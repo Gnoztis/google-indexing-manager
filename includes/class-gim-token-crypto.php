@@ -2,35 +2,22 @@
 /**
  * Encryption of the Google service-account JSON at rest.
  *
- * The service-account JSON contains private_key. That key signs JWTs for the
- * Indexing API and the Search Console API and stays valid until it is revoked
- * in Google Cloud, so a database dump without wp-config.php must not hand it
- * out. The JSON is therefore stored as an AEAD ciphertext, never as clear text.
+ * GENERATED FILE — do not edit by hand.
+ * Source: tools/shared/token-crypto/class-token-crypto.php
+ * Regenerate: node tools/scripts/sync-crypto.mjs google-indexing-manager
  *
- * Key source, in order:
- *   1. GIM_KEY_ENCRYPTION_KEY in wp-config.php — base64 of exactly 32 bytes;
- *   2. otherwise HKDF-SHA256 over AUTH_KEY|SECURE_AUTH_KEY|LOGGED_IN_KEY|NONCE_SALT
- *      with info "gim|json_key|v1", 32 bytes;
- *   3. otherwise fail closed: the key cannot be saved and the plugin keeps
- *      working with whatever it already has.
+ * The key never lives in the database: it comes from a wp-config.php constant
+ * (base64 of 32 raw bytes) or is derived with HKDF-SHA256 from the WordPress
+ * salts. Without either, saving is refused (fail closed).
  *
- * Cipher ladder (AEAD only), each value carries its algorithm:
- *   1. sodium_crypto_aead_xchacha20poly1305_ietf with AAD — "v1s:";
- *   2. sodium_crypto_secretbox with the AAD packed as AAD."\0".plaintext — "v1b:";
- *   3. openssl aes-256-gcm with a fresh 12-byte IV and a 16-byte tag — "v1g:".
- *
- * AAD is "gim|json_key|v1|gim_json_key", so a ciphertext copied into another
- * option or another plugin's settings does not decrypt. A fresh nonce/IV is
- * generated for every encryption.
- *
- * The settings screen never decrypts anything: it shows a fixed mask, the
- * non-secret client_email and the save date, all taken from the hint option.
- * A ciphertext that cannot be decrypted is reported as "no key": the admin is
- * asked to enter the JSON again and the ciphertext is never logged.
- *
- * This is the GIM implementation of the shared SEC-003 scheme; the AFI and EC
- * plugins use the same construction under their own prefixes.
+ * Values are AEAD ciphertexts with an algorithm prefix: "v1s:" (sodium
+ * xchacha20poly1305-ietf), "v1b:" (sodium secretbox with the additional data
+ * prepended) or "v1g:" (openssl aes-256-gcm). The additional data binds the
+ * value to this plugin and this option, so a ciphertext copied elsewhere does
+ * not decrypt. A fresh nonce/IV is generated for every encryption.
  */
+
+
 
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
@@ -41,7 +28,7 @@ final class Gim_Token_Crypto {
     /** Option that holds the ciphertext. */
     private const OPTION = 'gim_json_key';
 
-    /** Non-secret hint: client_email and the save date, for the settings mask. */
+    /** Non-secret hint shown next to the mask. */
     private const HINT_OPTION = 'gim_json_key_hint';
 
     /** Schema version of the storage format. */
@@ -53,23 +40,44 @@ final class Gim_Token_Crypto {
     /** wp-config.php constant with the base64 key (preferred). */
     private const KEY_CONSTANT = 'GIM_KEY_ENCRYPTION_KEY';
 
+    /** wp-config.php constant with a plaintext value (wins over the option). */
+    private const TOKEN_CONSTANT = '';
+
     /** Key derivation context; also the base of the additional data. */
     private const INFO = 'gim|json_key|v1';
 
     /**
-     * Additional data of the service-account JSON. Fixed by the SEC-003
-     * contract: a ciphertext cannot be moved to another option or plugin.
+     * Additional data of the stored value. Fixed by the contract: a ciphertext
+     * cannot be moved to another option or plugin.
      */
     public const AAD_JSON_KEY = 'gim|json_key|v1|gim_json_key';
 
-    /**
-     * Additional data of the OAuth access-token cache.
-     *
-     * The key material is the same as for the JSON key; the AAD binds the value
-     * to this purpose, so a token ciphertext can never be read as a key (or
-     * the other way round).
-     */
+    /** Additional data of the optional access-token cache (may be unused). */
     public const AAD_ACCESS_TOKEN = 'gim|access_token|v1|gim_access_token';
+
+    /** What is stored: a GitHub token or a service-account JSON document. */
+    private const PAYLOAD = 'json';
+
+    /** Hint shape: the last four characters or client_email + saved_at. */
+    private const HINT_KIND = 'email';
+
+    /** Mask behaviour of the plugin settings screen. */
+    private const MASK_MODE = 'gim';
+
+    /** Whether a plaintext value must look like the expected payload. */
+    private const STRICT_PAYLOAD = true;
+
+    /** Whether forget() also removes the schema marker. */
+    private const FORGET_SCHEMA = true;
+
+    /** Whether forget() recreates the empty option (options.php needs it). */
+    private const FORGET_REPREPARE = false;
+
+    /** Optional logger for the migration line: '' means error_log(). */
+    private const LOG_FUNCTION = 'gim_log_info';
+
+    /** One-line migration message without the secret; '' disables logging. */
+    private const LOG_MESSAGE = 'JSON-ключ сервисного аккаунта перенесён в зашифрованное хранилище';
 
     private const SCHEMA    = 1;
     private const KEY_BYTES = 32;
@@ -83,28 +91,26 @@ final class Gim_Token_Crypto {
 
     private const SALT_CONSTANTS = [ 'AUTH_KEY', 'SECURE_AUTH_KEY', 'LOGGED_IN_KEY', 'NONCE_SALT' ];
 
-    /**
-     * Per-request cache of the decrypted JSON.
-     *
-     * @var string|null
-     */
+    /** Per-request cache of the decrypted value. */
     private static ?string $cached = null;
 
-    /**
-     * Per-request failure code: no_key, decrypt, format, encrypt.
-     *
-     * @var string
-     */
+    /** Per-request failure code: no_key, decrypt, format, encrypt. */
     private static string $error = '';
 
-    /* ============================================================
+    private static bool $key_computed = false;
+
+    /** @var string|false */
+    private static string|false $key_value = false;
+
+    /*
+     * ---------------------------------------------------------------------
      *  Hooks
-     * ============================================================ */
+     * ---------------------------------------------------------------------
+     */
 
     /**
-     * Second line of defence: a plaintext JSON written through the Options API
-     * is encrypted before it reaches the database, and a row inserted around
-     * the filter is migrated right after the write.
+     * Registers the write-path guard: a plaintext value written through the
+     * Options API is encrypted before it reaches the database.
      */
     public static function register_hooks(): void {
         add_filter( 'pre_update_option_' . self::OPTION, [ __CLASS__, 'filter_incoming_value' ], 10, 2 );
@@ -112,9 +118,11 @@ final class Gim_Token_Crypto {
         add_action( 'updated_option', [ __CLASS__, 'after_option_written' ], 10, 2 );
     }
 
-    /* ============================================================
+    /*
+     * ---------------------------------------------------------------------
      *  Availability and key source
-     * ============================================================ */
+     * ---------------------------------------------------------------------
+     */
 
     /**
      * Where the encryption key comes from: "constant", "salts" or "none".
@@ -145,10 +153,18 @@ final class Gim_Token_Crypto {
      */
     public static function key_error(): string {
         if ( 'none' === self::key_source() ) {
-            return __( 'нет ни константы GIM_KEY_ENCRYPTION_KEY, ни солей WordPress', 'google-indexing-manager' );
+            return sprintf(
+                /* translators: %s: wp-config.php constant name. */
+                __( 'нет ни константы %s, ни солей WordPress', 'google-indexing-manager' ),
+                self::KEY_CONSTANT
+            );
         }
         if ( '' === self::key() ) {
-            return __( 'константа GIM_KEY_ENCRYPTION_KEY должна быть base64 от 32 байт', 'google-indexing-manager' );
+            return sprintf(
+                /* translators: %s: wp-config.php constant name. */
+                __( 'константа %s должна быть base64 от 32 байт', 'google-indexing-manager' ),
+                self::KEY_CONSTANT
+            );
         }
         if ( ! self::cipher_available() ) {
             return __( 'в PHP нет ни sodium, ни openssl с aes-256-gcm', 'google-indexing-manager' );
@@ -162,24 +178,25 @@ final class Gim_Token_Crypto {
      * A constant that is defined but malformed is a hard failure: deriving
      * from the salts instead would create ciphertext that becomes unreadable
      * the moment the constant is fixed.
+     *
+     * @return string
      */
     private static function key(): string {
-        static $key = null;
-
-        if ( null !== $key ) {
-            return $key;
+        if ( self::$key_computed ) {
+            return false === self::$key_value ? '' : self::$key_value;
         }
 
-        $key = '';
+        self::$key_computed = true;
+        self::$key_value    = false;
 
         if ( defined( self::KEY_CONSTANT ) ) {
             $decoded = base64_decode( trim( (string) constant( self::KEY_CONSTANT ) ), true );
 
             if ( is_string( $decoded ) && self::KEY_BYTES === strlen( $decoded ) ) {
-                $key = $decoded;
+                self::$key_value = $decoded;
             }
 
-            return $key;
+            return false === self::$key_value ? '' : self::$key_value;
         }
 
         $material = '';
@@ -188,10 +205,13 @@ final class Gim_Token_Crypto {
             if ( ! defined( $name ) ) {
                 return '';
             }
+
             $value = (string) constant( $name );
+
             if ( '' === $value ) {
                 return '';
             }
+
             $material .= ( '' === $material ? '' : '|' ) . $value;
         }
 
@@ -202,29 +222,24 @@ final class Gim_Token_Crypto {
         $derived = hash_hkdf( 'sha256', $material, self::KEY_BYTES, self::INFO );
 
         if ( is_string( $derived ) && self::KEY_BYTES === strlen( $derived ) ) {
-            $key = $derived;
+            self::$key_value = $derived;
         }
 
-        return $key;
+        return false === self::$key_value ? '' : self::$key_value;
     }
 
-    /**
-     * Whether at least one rung of the cipher ladder is usable.
-     */
     private static function cipher_available(): bool {
         return self::sodium_aead_available() || self::sodium_box_available() || self::openssl_available();
     }
 
     private static function sodium_aead_available(): bool {
         return function_exists( 'sodium_crypto_aead_xchacha20poly1305_ietf_encrypt' )
-            && function_exists( 'sodium_crypto_aead_xchacha20poly1305_ietf_decrypt' )
-            && defined( 'SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_NPUBBYTES' );
+            && function_exists( 'sodium_crypto_aead_xchacha20poly1305_ietf_decrypt' );
     }
 
     private static function sodium_box_available(): bool {
         return function_exists( 'sodium_crypto_secretbox' )
-            && function_exists( 'sodium_crypto_secretbox_open' )
-            && defined( 'SODIUM_CRYPTO_SECRETBOX_NONCEBYTES' );
+            && function_exists( 'sodium_crypto_secretbox_open' );
     }
 
     private static function openssl_available(): bool {
@@ -237,63 +252,72 @@ final class Gim_Token_Crypto {
         return is_array( $methods ) && in_array( self::CIPHER, $methods, true );
     }
 
-    /* ============================================================
+    /*
+     * ---------------------------------------------------------------------
      *  Encrypt / decrypt
-     * ============================================================ */
+     * ---------------------------------------------------------------------
+     */
 
     /**
      * Encrypts a value.
      *
-     * @param string $plaintext Value to encrypt.
-     * @param string $additional_data AEAD additional data; defaults to the
-     *                                service-account JSON binding.
-     * @return string "v1?:" prefixed value, empty string on failure.
+     * @param string $plaintext       Value to encrypt.
+     * @param string $additional_data AEAD additional data; empty means the
+     *                                option-bound AAD of this plugin.
+     * @return string Prefixed ciphertext, empty string on failure.
      */
-    public static function encrypt( string $plaintext, string $additional_data = self::AAD_JSON_KEY ): string {
+    public static function encrypt( string $plaintext, string $additional_data = '' ): string {
         if ( '' === $plaintext ) {
             return '';
         }
 
         $key = self::key();
+
         if ( '' === $key ) {
             self::note_error( 'no_key' );
             return '';
         }
 
-        // 1. sodium_crypto_aead_xchacha20poly1305_ietf — the preferred AEAD.
+        if ( '' === $additional_data ) {
+            $additional_data = self::AAD_JSON_KEY;
+        }
+
         if ( self::sodium_aead_available() ) {
             try {
-                $nonce  = random_bytes( SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_NPUBBYTES );
-                $cipher = sodium_crypto_aead_xchacha20poly1305_ietf_encrypt( $plaintext, $additional_data, $nonce, $key );
+                $nonce_bytes = defined( 'SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_NPUBBYTES' )
+                    ? (int) SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_NPUBBYTES
+                    : 24;
+                $nonce       = random_bytes( $nonce_bytes );
+                $cipher      = sodium_crypto_aead_xchacha20poly1305_ietf_encrypt( $plaintext, $additional_data, $nonce, $key );
 
                 if ( is_string( $cipher ) && '' !== $cipher ) {
                     return self::PREFIX_SODIUM_AEAD . base64_encode( $nonce . $cipher );
                 }
-            } catch ( Throwable $exception ) {
+            } catch ( \Throwable $exception ) {
                 // Fall through to the next rung of the ladder.
             }
         }
 
-        // 2. sodium_crypto_secretbox — no additional data in the API, so it is
-        //    prepended to the plaintext and verified on the way back.
         if ( self::sodium_box_available() ) {
             try {
-                $nonce  = random_bytes( SODIUM_CRYPTO_SECRETBOX_NONCEBYTES );
-                $cipher = sodium_crypto_secretbox( $additional_data . "\0" . $plaintext, $nonce, $key );
+                $nonce_bytes = defined( 'SODIUM_CRYPTO_SECRETBOX_NONCEBYTES' )
+                    ? (int) SODIUM_CRYPTO_SECRETBOX_NONCEBYTES
+                    : 24;
+                $nonce       = random_bytes( $nonce_bytes );
+                $cipher      = sodium_crypto_secretbox( $additional_data . "\0" . $plaintext, $nonce, $key );
 
                 if ( is_string( $cipher ) && '' !== $cipher ) {
                     return self::PREFIX_SODIUM_BOX . base64_encode( $nonce . $cipher );
                 }
-            } catch ( Throwable $exception ) {
+            } catch ( \Throwable $exception ) {
                 // Fall through to openssl.
             }
         }
 
-        // 3. openssl aes-256-gcm with a 12-byte IV and a 16-byte tag.
         if ( self::openssl_available() ) {
             try {
                 $iv = random_bytes( self::IV_BYTES );
-            } catch ( Throwable $exception ) {
+            } catch ( \Throwable $exception ) {
                 $iv = false;
             }
 
@@ -313,22 +337,34 @@ final class Gim_Token_Crypto {
     }
 
     /**
+     * Encrypts a value bound to a specific option name.
+     *
+     * @return string Prefixed ciphertext, empty string on failure.
+     */
+    private static function encrypt_for( string $plaintext, string $option_name ): string {
+        return self::encrypt( $plaintext, self::aad_for( $option_name ) );
+    }
+
+    /**
      * Decrypts a stored value.
      *
-     * @param string $stored "v1?:" prefixed value.
-     * @param string $additional_data AEAD additional data; must match the value
-     *                                used by encrypt().
-     * @return string Clear text, empty string on any failure (wrong key, flipped
-     *                byte, foreign AAD, malformed value).
+     * @param string $stored          "v1?:" prefixed value.
+     * @param string $additional_data AEAD additional data; must match encrypt().
+     * @return string Clear text, empty string on any failure.
      */
-    public static function decrypt( string $stored, string $additional_data = self::AAD_JSON_KEY ): string {
+    public static function decrypt( string $stored, string $additional_data = '' ): string {
         $stored = trim( $stored );
 
         if ( '' === $stored ) {
             return '';
         }
 
+        if ( '' === $additional_data ) {
+            $additional_data = self::AAD_JSON_KEY;
+        }
+
         $key = self::key();
+
         if ( '' === $key ) {
             self::note_error( 'no_key' );
             return '';
@@ -377,14 +413,26 @@ final class Gim_Token_Crypto {
         return $plain;
     }
 
+    /**
+     * Decrypts a value bound to a specific option name.
+     */
+    private static function decrypt_for( string $stored, string $option_name ): string {
+        return self::decrypt( $stored, self::aad_for( $option_name ) );
+    }
+
+    private static function aad_for( string $option_name ): string {
+        return self::INFO . '|' . $option_name;
+    }
+
     private static function decrypt_sodium_aead( string $payload, string $additional_data, string $key ): string {
         if ( ! self::sodium_aead_available() ) {
             return '';
         }
 
-        $nonce_bytes = SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_NPUBBYTES;
+        $nonce_bytes = defined( 'SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_NPUBBYTES' )
+            ? (int) SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_NPUBBYTES
+            : 24;
 
-        // Nonce plus at least the 16-byte tag.
         if ( strlen( $payload ) <= $nonce_bytes + self::TAG_BYTES ) {
             return '';
         }
@@ -394,7 +442,7 @@ final class Gim_Token_Crypto {
 
         try {
             $plain = sodium_crypto_aead_xchacha20poly1305_ietf_decrypt( $cipher, $additional_data, $nonce, $key );
-        } catch ( Throwable $exception ) {
+        } catch ( \Throwable $exception ) {
             return '';
         }
 
@@ -406,7 +454,9 @@ final class Gim_Token_Crypto {
             return '';
         }
 
-        $nonce_bytes = SODIUM_CRYPTO_SECRETBOX_NONCEBYTES;
+        $nonce_bytes = defined( 'SODIUM_CRYPTO_SECRETBOX_NONCEBYTES' )
+            ? (int) SODIUM_CRYPTO_SECRETBOX_NONCEBYTES
+            : 24;
 
         if ( strlen( $payload ) <= $nonce_bytes + self::TAG_BYTES ) {
             return '';
@@ -417,7 +467,7 @@ final class Gim_Token_Crypto {
 
         try {
             $plain = sodium_crypto_secretbox_open( $cipher, $nonce, $key );
-        } catch ( Throwable $exception ) {
+        } catch ( \Throwable $exception ) {
             return '';
         }
 
@@ -427,8 +477,6 @@ final class Gim_Token_Crypto {
 
         $binding = $additional_data . "\0";
 
-        // The additional data was prepended before encryption; a value that was
-        // encrypted elsewhere does not carry our binding.
         if ( 0 !== strpos( $plain, $binding ) ) {
             return '';
         }
@@ -454,9 +502,11 @@ final class Gim_Token_Crypto {
         return is_string( $plain ) ? $plain : '';
     }
 
-    /* ============================================================
+    /*
+     * ---------------------------------------------------------------------
      *  Value API
-     * ============================================================ */
+     * ---------------------------------------------------------------------
+     */
 
     /**
      * Whether a value is one of our ciphertexts.
@@ -481,163 +531,83 @@ final class Gim_Token_Crypto {
     }
 
     /**
-     * The service-account JSON in clear text, for JWT signing only.
-     *
-     * Order: the ciphertext option (a legacy plaintext row is migrated on the
-     * first read). A value that does not decrypt is treated as "no key", never
-     * as a fatal error, and the ciphertext is never logged.
+     * Whether a value exists: the wp-config constant, a ciphertext or a
+     * legacy plaintext value.
      */
-    public static function read(): string {
-        if ( null !== self::$cached ) {
-            return self::$cached;
+    private static function has_value(): bool {
+        if ( '' !== self::TOKEN_CONSTANT && defined( self::TOKEN_CONSTANT ) ) {
+            if ( '' !== trim( (string) constant( self::TOKEN_CONSTANT ) ) ) {
+                return true;
+            }
         }
 
         $stored = self::stored_value();
 
         if ( '' === $stored ) {
-            self::$cached = '';
-            return self::$cached;
-        }
-
-        if ( ! self::is_encrypted( $stored ) ) {
-            // A plaintext JSON written by an older version, an importer or a
-            // direct update_option() call outside the filter.
-            if ( self::migrate_plaintext() ) {
-                $stored = self::stored_value();
-            }
-
-            if ( ! self::is_encrypted( $stored ) ) {
-                if ( self::looks_like_service_account( $stored ) ) {
-                    // No key to encrypt with: keep the site working, but tell
-                    // the administrator that the JSON is still in clear text.
-                    self::note_error( 'no_key' );
-                    self::$cached = $stored;
-                    return self::$cached;
-                }
-
-                self::note_error( 'format' );
-                self::$cached = '';
-                return self::$cached;
-            }
-        }
-
-        self::$cached = self::decrypt( $stored );
-
-        return self::$cached;
-    }
-
-    /**
-     * Encrypts and stores the JSON together with its hint and schema version.
-     *
-     * @param string $json Valid service-account JSON.
-     * @return bool True when the ciphertext was written.
-     */
-    public static function store( string $json ): bool {
-        $json = trim( $json );
-
-        if ( ! self::looks_like_service_account( $json ) ) {
-            self::note_error( 'format' );
             return false;
         }
 
-        if ( ! self::is_available() ) {
-            self::note_error( 'no_key' );
-            return false;
+        if ( 'json' === self::PAYLOAD ) {
+            return self::is_encrypted( $stored ) || self::looks_like_payload( $stored );
         }
-
-        $cipher = self::encrypt( $json );
-
-        if ( '' === $cipher ) {
-            self::note_error( 'encrypt' );
-            return false;
-        }
-
-        $client_email = self::client_email_of( $json );
-
-        self::prepare_option( self::OPTION );
-        update_option( self::OPTION, $cipher, false );
-
-        self::prepare_option( self::HINT_OPTION );
-        update_option(
-            self::HINT_OPTION,
-            [
-                'client_email' => $client_email,
-                'saved_at'     => time(),
-            ],
-            false
-        );
-
-        self::ensure_schema();
-        self::set_autoload_off();
-        self::clear_error();
-
-        self::$cached = $json;
 
         return true;
     }
 
     /**
-     * Removes the ciphertext, the hint and the schema marker.
+     * Whether a value is configured (same as has_token() for token payloads).
      */
-    public static function forget(): void {
-        delete_option( self::OPTION );
-        delete_option( self::HINT_OPTION );
-        delete_option( self::SCHEMA_OPTION );
-        delete_transient( self::ERROR_TRANSIENT );
-
-        self::$cached = '';
-        self::$error  = '';
+    public static function has_key(): bool {
+        return self::has_value();
     }
 
     /**
-     * Encrypts a plaintext JSON left by an older version, once.
-     *
-     * @return bool True when the value was migrated in this call.
+     * Whether a value is configured (same as has_key() for JSON payloads).
      */
-    public static function migrate_plaintext(): bool {
+    public static function has_token(): bool {
+        return self::has_value();
+    }
+
+    /**
+     * Whether the stored ciphertext cannot be decrypted with the current key.
+     */
+    public static function is_unreadable(): bool {
+        if ( '' !== self::TOKEN_CONSTANT && defined( self::TOKEN_CONSTANT )
+            && '' !== trim( (string) constant( self::TOKEN_CONSTANT ) ) ) {
+            return false;
+        }
+
         $stored = self::stored_value();
 
-        if ( '' === $stored || self::is_encrypted( $stored ) || ! self::looks_like_service_account( $stored ) ) {
+        if ( '' === $stored || ! self::is_encrypted( $stored ) ) {
             return false;
         }
 
-        if ( ! self::is_available() ) {
-            self::note_error( 'no_key' );
+        if ( '' !== self::decrypt( $stored ) ) {
             return false;
         }
 
-        $cipher = self::encrypt( $stored );
-
-        if ( '' === $cipher ) {
-            self::note_error( 'encrypt' );
-            return false;
-        }
-
-        update_option( self::OPTION, $cipher, false );
-        update_option(
-            self::HINT_OPTION,
-            [
-                'client_email' => self::client_email_of( $stored ),
-                'saved_at'     => time(),
-            ],
-            false
-        );
-        update_option( self::SCHEMA_OPTION, self::SCHEMA, false );
-        self::set_autoload_off();
-        self::clear_error();
-
-        self::$cached = $stored;
-
-        // One line, once, without the JSON or the ciphertext.
-        if ( function_exists( 'gim_log_info' ) ) {
-            gim_log_info( 'JSON-ключ сервисного аккаунта перенесён в зашифрованное хранилище' );
-        }
+        self::note_error( 'decrypt' );
 
         return true;
     }
 
     /**
-     * Hint stored next to the ciphertext: client_email and save timestamp.
+     * Whether a legacy plaintext value is still stored (no key to migrate it).
+     */
+    public static function has_plaintext_storage(): bool {
+        if ( '' !== self::TOKEN_CONSTANT && defined( self::TOKEN_CONSTANT )
+            && '' !== trim( (string) constant( self::TOKEN_CONSTANT ) ) ) {
+            return false;
+        }
+
+        $stored = self::stored_value();
+
+        return '' !== $stored && ! self::is_encrypted( $stored ) && self::looks_like_payload( $stored );
+    }
+
+    /**
+     * The non-secret hint stored next to the ciphertext.
      *
      * @return array{client_email:string, saved_at:int}
      */
@@ -655,77 +625,233 @@ final class Gim_Token_Crypto {
     }
 
     /**
-     * Masked value for the settings screen: eight bullets.
-     *
-     * The ciphertext is not decrypted and the JSON is not touched for this.
+     * String hint for the token mask: the last four characters.
+     */
+    public static function stored_hint(): string {
+        if ( '' !== self::TOKEN_CONSTANT && defined( self::TOKEN_CONSTANT )
+            && '' !== trim( (string) constant( self::TOKEN_CONSTANT ) ) ) {
+            return self::hint_for( trim( (string) constant( self::TOKEN_CONSTANT ) ) );
+        }
+
+        $hint = get_option( self::HINT_OPTION, '' );
+
+        if ( is_string( $hint ) && '' !== trim( $hint ) ) {
+            return trim( $hint );
+        }
+
+        if ( is_array( $hint ) && isset( $hint['client_email'] ) ) {
+            return (string) $hint['client_email'];
+        }
+
+        if ( 'tail' === self::HINT_KIND ) {
+            $value = self::read();
+            return '' !== $value ? self::hint_for( $value ) : '';
+        }
+
+        return '';
+    }
+
+    /**
+     * Mask for the settings screen. The value is never decrypted for this.
      */
     public static function mask(): string {
-        return str_repeat( '•', 8 );
+        $bullets = str_repeat( '•', 8 );
+
+        if ( 'json' === self::PAYLOAD || 'gim' === self::MASK_MODE ) {
+            return $bullets;
+        }
+
+        if ( 'ec' === self::MASK_MODE ) {
+            $hint = (string) get_option( self::HINT_OPTION, '' );
+
+            if ( '' === $hint || 1 !== preg_match( '/^[A-Za-z0-9_]{1,4}$/', $hint ) ) {
+                return '';
+            }
+
+            return $bullets . $hint;
+        }
+
+        return $bullets . self::stored_hint();
     }
 
     /**
-     * Whether a key is configured: an encrypted value or a legacy plaintext row.
+     * The value in clear text, for the updater/API only.
      */
-    public static function has_key(): bool {
+    public static function read(): string {
+        if ( null !== self::$cached ) {
+            return self::$cached;
+        }
+
+        if ( '' !== self::TOKEN_CONSTANT && defined( self::TOKEN_CONSTANT ) ) {
+            $constant = trim( (string) constant( self::TOKEN_CONSTANT ) );
+
+            if ( '' !== $constant ) {
+                self::clear_error();
+                self::$cached = $constant;
+                return self::$cached;
+            }
+        }
+
         $stored = self::stored_value();
 
-        return '' !== $stored
-            && ( self::is_encrypted( $stored ) || self::looks_like_service_account( $stored ) );
+        if ( '' === $stored ) {
+            self::$cached = '';
+            return self::$cached;
+        }
+
+        if ( ! self::is_encrypted( $stored ) ) {
+            self::migrate_plaintext();
+            $stored = self::stored_value();
+
+            if ( ! self::is_encrypted( $stored ) ) {
+                if ( self::STRICT_PAYLOAD && ! self::looks_like_payload( $stored ) ) {
+                    self::note_error( 'format' );
+                    self::$cached = '';
+                    return self::$cached;
+                }
+
+                // No key to encrypt with: keep the site working rather than
+                // dropping a value the administrator already entered.
+                self::note_error( 'no_key' );
+                self::$cached = trim( $stored );
+                return self::$cached;
+            }
+        }
+
+        self::$cached = self::decrypt( $stored );
+
+        return self::$cached;
     }
 
     /**
-     * Whether the stored ciphertext cannot be decrypted with the current key.
-     *
-     * A stale ciphertext is reported once, and the admin is asked to enter the
-     * JSON again — the ciphertext itself is never shown or logged.
+     * Encrypts and stores a value, updates the hint and the schema version.
      */
-    public static function is_unreadable(): bool {
-        $stored = self::stored_value();
+    public static function store( string $value ): bool {
+        $value = trim( $value );
 
-        if ( '' === $stored || ! self::is_encrypted( $stored ) ) {
+        if ( '' === $value ) {
+            if ( self::STRICT_PAYLOAD ) {
+                self::note_error( 'format' );
+            }
             return false;
         }
 
-        if ( '' !== self::decrypt( $stored ) ) {
+        if ( self::STRICT_PAYLOAD && ! self::looks_like_payload( $value ) ) {
+            self::note_error( 'format' );
             return false;
         }
 
-        self::note_error( 'decrypt' );
+        if ( ! self::is_available() ) {
+            self::note_error( 'no_key' );
+            return false;
+        }
+
+        $cipher = self::encrypt( $value );
+
+        if ( '' === $cipher ) {
+            self::note_error( 'encrypt' );
+            return false;
+        }
+
+        self::prepare_option( self::OPTION );
+        update_option( self::OPTION, $cipher, false );
+
+        self::prepare_option( self::HINT_OPTION );
+        update_option( self::HINT_OPTION, self::hint_payload( $value ), false );
+
+        self::ensure_schema();
+        self::set_autoload_off();
+        self::clear_error();
+
+        self::$cached = $value;
 
         return true;
     }
 
     /**
-     * Whether a legacy plaintext JSON is still stored (no key to migrate it).
+     * Removes the stored value and its hint. The schema marker is removed too
+     * unless the plugin keeps it as an installation marker.
      */
-    public static function has_plaintext_storage(): bool {
+    public static function forget(): void {
+        delete_option( self::OPTION );
+        delete_option( self::HINT_OPTION );
+
+        if ( self::FORGET_SCHEMA ) {
+            delete_option( self::SCHEMA_OPTION );
+        }
+
+        delete_transient( self::ERROR_TRANSIENT );
+
+        self::$cached = '';
+        self::$error  = '';
+
+        if ( self::FORGET_REPREPARE ) {
+            // options.php writes the returned empty value afterwards; recreate
+            // the option with autoload disabled so it cannot become autoloaded.
+            self::prepare_option( self::OPTION );
+        }
+    }
+
+    /**
+     * Encrypts a legacy plaintext value on the first read.
+     *
+     * @return bool True when a migration was performed.
+     */
+    public static function migrate_plaintext(): bool {
         $stored = self::stored_value();
 
-        return '' !== $stored && ! self::is_encrypted( $stored ) && self::looks_like_service_account( $stored );
-    }
+        if ( '' === $stored || self::is_encrypted( $stored ) ) {
+            return false;
+        }
 
-    /**
-     * Reason of the last failure in this request, if any.
-     *
-     * @return string "no_key", "decrypt", "format", "encrypt" or "".
-     */
-    public static function last_error(): string {
-        return self::$error;
-    }
+        if ( self::STRICT_PAYLOAD && ! self::looks_like_payload( $stored ) ) {
+            return false;
+        }
 
-    /**
-     * Drops the per-request cache (after a write outside store()/forget()).
-     */
-    public static function reset_cache(): void {
+        if ( ! self::is_available() ) {
+            self::note_error( 'no_key' );
+            return false;
+        }
+
+        $cipher = self::encrypt( $stored );
+
+        if ( '' === $cipher ) {
+            self::note_error( 'encrypt' );
+            return false;
+        }
+
+        self::prepare_option( self::OPTION );
+        update_option( self::OPTION, $cipher, false );
+
+        self::prepare_option( self::HINT_OPTION );
+        update_option( self::HINT_OPTION, self::hint_payload( $stored ), false );
+
+        self::ensure_schema();
+        self::set_autoload_off();
+        self::clear_error();
+
         self::$cached = null;
+
+        self::log_migration();
+
+        return true;
     }
 
     /**
-     * Creates the storage options with autoload disabled and the schema marker.
-     *
-     * Called from the settings sanitizer before options.php writes a value, so
-     * the option never becomes autoloaded and the schema exists from the first
-     * save.
+     * Creates the schema version option (autoload disabled).
+     */
+    public static function ensure_schema(): void {
+        if ( false === get_option( self::SCHEMA_OPTION, false ) ) {
+            update_option( self::SCHEMA_OPTION, self::SCHEMA, false );
+        } elseif ( self::SCHEMA !== (int) get_option( self::SCHEMA_OPTION, 0 ) ) {
+            update_option( self::SCHEMA_OPTION, self::SCHEMA, false );
+        }
+
+        self::set_autoload_off();
+    }
+
+    /**
+     * Creates the storage options with autoload disabled if missing.
      */
     public static function ensure_storage_options(): void {
         self::prepare_option( self::OPTION );
@@ -734,10 +860,236 @@ final class Gim_Token_Crypto {
         self::set_autoload_off();
     }
 
-    /* ============================================================
-     *  Validation
-     * ============================================================ */
+    /**
+     * Reason of the last failure in this request, if any.
+     */
+    public static function last_error(): string {
+        if ( '' !== self::$error ) {
+            return self::$error;
+        }
 
+        $code = (string) get_transient( self::ERROR_TRANSIENT );
+
+        return in_array( $code, [ 'no_key', 'decrypt', 'format', 'encrypt' ], true ) ? $code : '';
+    }
+
+    /**
+     * Drops the per-request caches (after a direct change or an upgrade).
+     */
+    public static function reset_cache(): void {
+        self::$cached       = null;
+        self::$key_computed = false;
+        self::$key_value    = false;
+    }
+
+    /*
+     * ---------------------------------------------------------------------
+     *  Write-path guards
+     * ---------------------------------------------------------------------
+     */
+
+    /**
+     * Encrypts a plaintext value arriving through update_option().
+     *
+     * @param mixed $value     New value.
+     * @param mixed $old_value Previous value.
+     * @return mixed
+     */
+    public static function filter_incoming_value( $value, $old_value = null ) {
+        return self::filter_incoming( $value, $old_value );
+    }
+
+    /**
+     * Alias of filter_incoming_value() for token payloads.
+     *
+     * @param mixed $value     New value.
+     * @param mixed $old_value Previous value.
+     * @return mixed
+     */
+    public static function filter_incoming_token( $value, $old_value = null ) {
+        return self::filter_incoming( $value, $old_value );
+    }
+
+    /**
+     * @param mixed $value
+     * @param mixed $old_value
+     * @return mixed
+     */
+    private static function filter_incoming( $value, $old_value = null ) {
+        if ( ! is_string( $value ) ) {
+            return $value;
+        }
+
+        $value = trim( $value );
+
+        if ( '' === $value || self::is_encrypted( $value ) || ! self::looks_like_payload( $value ) ) {
+            return $value;
+        }
+
+        $cipher = self::encrypt( $value );
+
+        if ( '' === $cipher ) {
+            self::note_error( 'no_key' );
+            return is_string( $old_value ) ? $old_value : '';
+        }
+
+        self::prepare_option( self::HINT_OPTION );
+        update_option( self::HINT_OPTION, self::hint_payload( $value ), false );
+
+        self::ensure_schema();
+        self::set_autoload_off();
+        self::clear_error();
+
+        self::$cached = $value;
+
+        return $cipher;
+    }
+
+    /**
+     * Migrates a plaintext value inserted directly or written around the
+     * update filter.
+     *
+     * @param string $option Option name.
+     * @param mixed  $value  Stored value.
+     */
+    public static function after_option_written( $option, $value ): void {
+        if ( self::OPTION !== $option ) {
+            return;
+        }
+
+        self::set_autoload_off();
+
+        if ( is_string( $value ) && ! self::is_encrypted( $value ) && self::looks_like_payload( $value ) ) {
+            self::migrate_plaintext();
+        }
+    }
+
+    /*
+     * ---------------------------------------------------------------------
+     *  Helpers
+     * ---------------------------------------------------------------------
+     */
+
+    /**
+     * Whether a string looks like the expected payload.
+     */
+    private static function looks_like_payload( string $value ): bool {
+        $value = trim( $value );
+
+        if ( '' === $value ) {
+            return false;
+        }
+
+        if ( 'json' === self::PAYLOAD ) {
+            if ( '{' !== $value[0] ) {
+                return false;
+            }
+
+            return false !== strpos( $value, '"private_key"' ) && false !== strpos( $value, '"client_email"' );
+        }
+
+        return 1 === preg_match( '/^(?:gh[pous]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})$/', $value );
+    }
+
+    /**
+     * Last four characters of the value, never the whole secret.
+     */
+    private static function hint_for( string $value ): string {
+        $value = trim( $value );
+
+        if ( strlen( $value ) < 8 ) {
+            return '';
+        }
+
+        $hint = substr( $value, -4 );
+
+        return 1 === preg_match( '/^[A-Za-z0-9_]{1,4}$/', $hint ) ? $hint : '';
+    }
+
+    /**
+     * Hint payload written next to the ciphertext.
+     *
+     * @return string|array{client_email:string, saved_at:int}
+     */
+    private static function hint_payload( string $value ) {
+        if ( 'email' === self::HINT_KIND ) {
+            return [
+                'client_email' => self::client_email_of( $value ),
+                'saved_at'     => time(),
+            ];
+        }
+
+        return self::hint_for( $value );
+    }
+
+    /**
+     * client_email of a service-account JSON, without logging the document.
+     */
+    private static function client_email_of( string $json ): string {
+        $decoded = json_decode( $json, true );
+
+        if ( ! is_array( $decoded ) || empty( $decoded['client_email'] ) ) {
+            return '';
+        }
+
+        return (string) $decoded['client_email'];
+    }
+
+    /**
+     * Creates an option with autoload disabled when it does not exist yet.
+     */
+    private static function prepare_option( string $option ): void {
+        if ( false === get_option( $option, false ) ) {
+            update_option( $option, '', false );
+        }
+    }
+
+    /**
+     * Forces autoload off for the storage options (WP 6.4+).
+     */
+    private static function set_autoload_off(): void {
+        if ( ! function_exists( 'wp_set_option_autoload' ) ) {
+            return;
+        }
+
+        wp_set_option_autoload( self::OPTION, false );
+        wp_set_option_autoload( self::HINT_OPTION, false );
+        wp_set_option_autoload( self::SCHEMA_OPTION, false );
+    }
+
+    private static function note_error( string $code ): void {
+        self::$error = $code;
+
+        set_transient( self::ERROR_TRANSIENT, $code, 15 * MINUTE_IN_SECONDS );
+    }
+
+    private static function clear_error(): void {
+        self::$error = '';
+
+        delete_transient( self::ERROR_TRANSIENT );
+    }
+
+    /**
+     * Writes one migration line, without the secret. Exactly once per migration.
+     */
+    private static function log_migration(): void {
+        if ( '' === self::LOG_MESSAGE ) {
+            return;
+        }
+
+        if ( '' !== self::LOG_FUNCTION ) {
+            if ( function_exists( self::LOG_FUNCTION ) ) {
+                call_user_func( self::LOG_FUNCTION, self::LOG_MESSAGE );
+            }
+            return;
+        }
+
+        if ( function_exists( 'error_log' ) ) {
+            error_log( self::LOG_MESSAGE ); // phpcs:ignore -- the message is a literal and contains no secret.
+        }
+    }
+
+    
     /**
      * Validates a service-account JSON before it is encrypted or used.
      *
@@ -789,10 +1141,10 @@ final class Gim_Token_Crypto {
         }
 
         $normalized = function_exists( 'gim_normalize_private_key' )
-            ? gim_normalize_private_key( $private_key )
+            ? call_user_func( 'gim_normalize_private_key', $private_key )
             : str_replace( '\\n', "\n", $private_key );
 
-        if ( false === strpos( $normalized, '-----BEGIN' ) || false === strpos( $normalized, 'PRIVATE KEY-----' ) ) {
+        if ( false === strpos( (string) $normalized, '-----BEGIN' ) || false === strpos( (string) $normalized, 'PRIVATE KEY-----' ) ) {
             return [
                 'ok'           => false,
                 'message'      => __( 'private_key не похож на PEM-ключ RSA.', 'google-indexing-manager' ),
@@ -807,156 +1159,7 @@ final class Gim_Token_Crypto {
         ];
     }
 
-    /* ============================================================
-     *  Write-path guards
-     * ============================================================ */
-
-    /**
-     * Encrypts a plaintext JSON arriving through update_option(), whatever the
-     * source. Fail closed: never write a plaintext secret when there is no key.
-     *
-     * @param mixed $value     New value.
-     * @param mixed $old_value Previous value.
-     * @return mixed
-     */
-    public static function filter_incoming_value( $value, $old_value = null ) {
-        if ( ! is_string( $value ) ) {
-            return $value;
-        }
-
-        $value = trim( $value );
-
-        if ( '' === $value || self::is_encrypted( $value ) || ! self::looks_like_service_account( $value ) ) {
-            return $value;
-        }
-
-        $cipher = self::encrypt( $value );
-
-        if ( '' === $cipher ) {
-            self::note_error( 'no_key' );
-            return is_string( $old_value ) ? $old_value : '';
-        }
-
-        self::prepare_option( self::HINT_OPTION );
-        update_option(
-            self::HINT_OPTION,
-            [
-                'client_email' => self::client_email_of( $value ),
-                'saved_at'     => time(),
-            ],
-            false
-        );
-        self::ensure_schema();
-        self::set_autoload_off();
-        self::clear_error();
-
-        self::$cached = $value;
-
-        return $cipher;
-    }
-
-    /**
-     * Migrates a plaintext value inserted directly (add_option) or written
-     * around the update filter.
-     *
-     * @param string $option Option name.
-     * @param mixed  $value  Stored value.
-     */
-    public static function after_option_written( $option, $value ): void {
-        if ( self::OPTION !== $option ) {
-            return;
-        }
-
-        self::set_autoload_off();
-
-        if ( is_string( $value ) && ! self::is_encrypted( $value ) && self::looks_like_service_account( $value ) ) {
-            self::migrate_plaintext();
-        }
-    }
-
-    /* ============================================================
-     *  Helpers
-     * ============================================================ */
-
-    /**
-     * Whether a string looks like a Google service-account JSON with a private key.
-     */
-    private static function looks_like_service_account( string $value ): bool {
-        $value = trim( $value );
-
-        if ( '' === $value || '{' !== $value[0] ) {
-            return false;
-        }
-
-        return false !== strpos( $value, '"private_key"' ) && false !== strpos( $value, '"client_email"' );
-    }
-
-    /**
-     * client_email of a service-account JSON, without logging the document.
-     */
-    private static function client_email_of( string $json ): string {
-        $decoded = json_decode( $json, true );
-
-        if ( ! is_array( $decoded ) || empty( $decoded['client_email'] ) ) {
-            return '';
-        }
-
-        return (string) $decoded['client_email'];
-    }
-
-    /**
-     * Creates an option with autoload disabled when it does not exist yet.
-     * update_option() would otherwise create a missing option as autoloaded.
-     */
-    private static function prepare_option( string $option ): void {
-        if ( false === get_option( $option, false ) ) {
-            add_option( $option, '', '', false );
-        }
-    }
-
-    /**
-     * Creates the schema version option (autoload disabled).
-     */
-    private static function ensure_schema(): void {
-        if ( false === get_option( self::SCHEMA_OPTION, false ) ) {
-            add_option( self::SCHEMA_OPTION, self::SCHEMA, '', false );
-        } elseif ( self::SCHEMA !== (int) get_option( self::SCHEMA_OPTION, 0 ) ) {
-            update_option( self::SCHEMA_OPTION, self::SCHEMA, false );
-        }
-    }
-
-    /**
-     * Forces autoload off for the key storage options (WP 6.4+).
-     */
-    private static function set_autoload_off(): void {
-        if ( ! function_exists( 'wp_set_option_autoload' ) ) {
-            return;
-        }
-
-        wp_set_option_autoload( self::OPTION, false );
-        wp_set_option_autoload( self::HINT_OPTION, false );
-        wp_set_option_autoload( self::SCHEMA_OPTION, false );
-    }
-
-    /**
-     * Remembers a failure for the admin notice. Only the code is stored.
-     */
-    private static function note_error( string $code ): void {
-        self::$error = $code;
-
-        set_transient( self::ERROR_TRANSIENT, $code, 15 * MINUTE_IN_SECONDS );
-    }
-
-    /**
-     * Clears a remembered failure after a successful write.
-     */
-    private static function clear_error(): void {
-        self::$error = '';
-
-        delete_transient( self::ERROR_TRANSIENT );
-    }
 }
-
 /* -------------------------------------------------------------------------
  *  Plugin-level accessors.
  * ---------------------------------------------------------------------- */
@@ -1004,7 +1207,7 @@ function gim_json_key_configured(): bool {
  * @return array{configured:bool, encrypted:bool, readable:bool, source:string, client_email:string, saved_at:int, key_error:string}
  */
 function gim_json_key_state(): array {
-    $hint      = Gim_Token_Crypto::hint();
+    $hint       = Gim_Token_Crypto::hint();
     $configured = Gim_Token_Crypto::has_key();
     $encrypted  = Gim_Token_Crypto::is_encrypted( Gim_Token_Crypto::stored_value() );
     $source     = Gim_Token_Crypto::key_source();

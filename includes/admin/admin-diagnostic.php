@@ -42,7 +42,7 @@ function gim_get_diagnostic_steps(): array {
         [
             'key'         => 'indexing_api',
             'name'        => __( 'Indexing API', 'google-indexing-manager' ),
-            'description' => __( 'Пробная отправка URL на индексацию', 'google-indexing-manager' ),
+            'description' => __( 'Пробная отправка URL — только по явному согласию: расходует 1 уведомление из суточной квоты', 'google-indexing-manager' ),
         ],
         [
             'key'         => 'db_schema',
@@ -72,6 +72,13 @@ function gim_render_diagnostic(): void {
     ?>
     <p class="description">
         <?php esc_html_e( 'Пошаговая проверка интеграции: ключ, токен, права, API, cron, база данных.', 'google-indexing-manager' ); ?>
+    </p>
+
+    <p class="gim-actions">
+        <label class="gim-diagnostic-probe" for="gim-diagnostic-probe">
+            <input type="checkbox" id="gim-diagnostic-probe" value="1" autocomplete="off">
+            <?php esc_html_e( 'Выполнить пробную отправку URL в Indexing API (расходует 1 уведомление из суточной квоты)', 'google-indexing-manager' ); ?>
+        </label>
     </p>
 
     <p class="gim-actions">

@@ -771,7 +771,11 @@ jQuery( document ).ready( function ( $ ) {
 
         $( '#gim-diagnostic-summary' ).attr( 'hidden', true ).empty();
 
-        post( 'gim_diagnostic', {}, function ( err, data ) {
+        // A real Indexing API probe spends one daily notification: it runs only
+        // when the administrator ticks the box.
+        var probe = $( '#gim-diagnostic-probe' ).is( ':checked' ) ? '1' : '0';
+
+        post( 'gim_diagnostic', { probe: probe }, function ( err, data ) {
             $btn.prop( 'disabled', false ).text( 'Запустить диагностику' );
 
             if ( err ) {

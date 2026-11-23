@@ -191,8 +191,22 @@ function gim_cron_logs_cleanup_tick(): void {
                 )
             );
         }
+
+        // The row ceiling applies even when retention is 0 ("keep forever").
+        $trimmed = gim_trim_log_rows();
+
+        if ( $trimmed > 0 ) {
+            gim_log_debug(
+                sprintf(
+                    'Очистка логов: удалено %d записей сверх потолка %d',
+                    $trimmed,
+                    gim_get_log_max_rows()
+                )
+            );
+        }
     } catch ( Throwable $e ) {
-        gim_log_error( 'Ошибка очистки логов: ' . $e->getMessage() );
+        gim_log_error( 'Ошибка очистки логов' );
+        gim_log_exception( $e );
     }
 
     gim_schedule_next_logs_cleanup();
@@ -283,7 +297,8 @@ function gim_cron_sync_urls_tick(): void {
             )
         );
     } catch ( Throwable $e ) {
-        gim_log_error( 'Ошибка синхронизации URL: ' . $e->getMessage() );
+        gim_log_error( 'Ошибка синхронизации URL' );
+        gim_log_exception( $e );
     } finally {
         gim_release_lock( 'sync_urls' );
     }
@@ -316,7 +331,8 @@ function gim_cron_sync_tags_tick(): void {
             sprintf( 'Синхронизация исключений: помечено %d URL', $excluded )
         );
     } catch ( Throwable $e ) {
-        gim_log_error( 'Ошибка синхронизации исключений: ' . $e->getMessage() );
+        gim_log_error( 'Ошибка синхронизации исключений' );
+        gim_log_exception( $e );
     } finally {
         gim_release_lock( 'sync_tags' );
     }

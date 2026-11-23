@@ -19,6 +19,15 @@ const GIM_STATS_CACHE_TTL    = 60;
 const GIM_STATS_CURRENT_OPTION  = 'gim_stats_current';
 const GIM_STATS_PREVIOUS_OPTION = 'gim_stats_previous';
 
+/**
+ * Hard ceiling on the log table and the batch size of the trim. The ceiling is
+ * independent of the retention period, so retention 0 (keep forever) still
+ * cannot grow the table without bound.
+ */
+const GIM_LOG_MAX_ROWS      = 50000;
+const GIM_LOG_MIN_MAX_ROWS  = 1000;
+const GIM_LOG_DELETE_BATCH  = 1000;
+
 function gim_invalidate_stats_cache(): void {
     delete_transient( GIM_STATS_CACHE_KEY );
     delete_transient( GIM_RECHECK_CACHE_KEY );
@@ -228,6 +237,8 @@ function gim_quota_key( string $api ): string {
 
 function gim_mark_quota_exhausted( string $api ): void {
     update_option( gim_quota_key( $api ), time(), false );
+
+    unset( $GLOBALS['gim_quota_memo'][ $api ] );
 }
 
 function gim_get_quota_exhausted_at( string $api ): int {
@@ -235,27 +246,31 @@ function gim_get_quota_exhausted_at( string $api ): int {
 }
 
 function gim_is_quota_exhausted( string $api ): bool {
-    static $memo = [];
-
-    if ( isset( $memo[ $api ] ) ) {
-        return $memo[ $api ];
+    // Request-scoped memo in a global so that marking the quota (a 429 in the
+    // same request) can invalidate it; a static inside this function would keep
+    // answering "not exhausted" after the marker was written.
+    if ( isset( $GLOBALS['gim_quota_memo'][ $api ] ) ) {
+        return (bool) $GLOBALS['gim_quota_memo'][ $api ];
     }
 
     $ts = gim_get_quota_exhausted_at( $api );
     if ( $ts === 0 ) {
-        $memo[ $api ] = false;
+        $GLOBALS['gim_quota_memo'][ $api ] = false;
         return false;
     }
 
     $today         = current_time( 'Y-m-d' );
     $exhausted_day = wp_date( 'Y-m-d', $ts, wp_timezone() );
 
-    $memo[ $api ] = ( $today === $exhausted_day );
-    return $memo[ $api ];
+    $GLOBALS['gim_quota_memo'][ $api ] = ( $today === $exhausted_day );
+
+    return (bool) $GLOBALS['gim_quota_memo'][ $api ];
 }
 
 function gim_clear_quota_exhausted( string $api ): void {
     delete_option( gim_quota_key( $api ) );
+
+    unset( $GLOBALS['gim_quota_memo'][ $api ] );
 }
 
 /* -------------------------------------------------------------------------
@@ -354,6 +369,64 @@ function gim_purge_old_logs(): int {
     );
 
     return (int) $deleted;
+}
+
+/**
+ * Hard ceiling on the number of log rows.
+ *
+ * Retention is a period, so "0 — хранить бессрочно" would let the table grow
+ * without any limit: the healthcheck writes a debug line every 15 minutes, and
+ * every worker tick writes an info line. The ceiling keeps the newest rows and
+ * is independent of the retention setting; filter `gim_log_max_rows` changes it.
+ */
+function gim_get_log_max_rows(): int {
+    $max = (int) apply_filters( 'gim_log_max_rows', GIM_LOG_MAX_ROWS );
+
+    return max( GIM_LOG_MIN_MAX_ROWS, $max );
+}
+
+/**
+ * Deletes the oldest rows above the ceiling, in batches.
+ *
+ * One DELETE per 1000 rows keeps the table lock short; the loop stops as soon
+ * as the table is under the ceiling or a statement deletes nothing.
+ *
+ * @param int $max_rows Ceiling to enforce; 0 means gim_get_log_max_rows().
+ * @return int Number of deleted rows.
+ */
+function gim_trim_log_rows( int $max_rows = 0 ): int {
+    global $wpdb;
+
+    $table    = $wpdb->prefix . 'gim_log';
+    $max_rows = $max_rows > 0 ? $max_rows : gim_get_log_max_rows();
+
+    // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- literal COUNT; the table name comes from $wpdb->prefix.
+    $total = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table}" );
+
+    $excess = $total - $max_rows;
+
+    if ( $excess <= 0 ) {
+        return 0;
+    }
+
+    $deleted = 0;
+
+    while ( $excess > 0 ) {
+        $limit = min( GIM_LOG_DELETE_BATCH, $excess );
+
+        $rows = $wpdb->query(
+            $wpdb->prepare( "DELETE FROM {$table} ORDER BY id ASC LIMIT %d", $limit )
+        );
+
+        if ( ! $rows ) {
+            break;
+        }
+
+        $deleted += (int) $rows;
+        $excess  -= (int) $rows;
+    }
+
+    return $deleted;
 }
 
 /* -------------------------------------------------------------------------
@@ -514,10 +587,12 @@ function gim_recompute_exclusions(): int {
         return 0;
     }
 
+    $hashes = array_map( 'gim_url_hash', $urls );
+
     $updated = 0;
-    foreach ( array_chunk( $urls, 500 ) as $chunk ) {
+    foreach ( array_chunk( $hashes, 500 ) as $chunk ) {
         $phs = implode( ',', array_fill( 0, count( $chunk ), '%s' ) );
-        $sql = "UPDATE {$table} SET excluded = 1 WHERE url IN ({$phs})";
+        $sql = "UPDATE {$table} SET excluded = 1 WHERE url_hash IN ({$phs})";
         $res = $wpdb->query( $wpdb->prepare( $sql, ...$chunk ) );
         $updated += (int) $res;
     }
@@ -535,6 +610,18 @@ function gim_get_excluded_count(): int {
  * Работа с таблицей URL.
  * ---------------------------------------------------------------------- */
 
+/**
+ * Stable hash of a URL: the unique key of the queue.
+ *
+ * The url column is varchar(2048) and a MySQL prefix index on it compares only
+ * the first 191 characters, so two long URLs sharing a prefix looked like the
+ * same row. The hash is a full sha256 of the value exactly as it is stored, so
+ * the runtime and the migration always agree.
+ */
+function gim_url_hash( string $url ): string {
+    return hash( 'sha256', $url );
+}
+
 function gim_add_urls( array $urls ): int {
     global $wpdb;
     $table = $wpdb->prefix . 'gim_unindexed';
@@ -548,9 +635,10 @@ function gim_add_urls( array $urls ): int {
 
     $existing = [];
     foreach ( array_chunk( $urls, 500 ) as $chunk ) {
-        $placeholders = implode( ',', array_fill( 0, count( $chunk ), '%s' ) );
-        $sql          = "SELECT url FROM {$table} WHERE url IN ({$placeholders})";
-        $found        = $wpdb->get_col( $wpdb->prepare( $sql, ...$chunk ) );
+        $hashes       = array_map( 'gim_url_hash', $chunk );
+        $placeholders = implode( ',', array_fill( 0, count( $hashes ), '%s' ) );
+        $sql          = "SELECT url_hash FROM {$table} WHERE url_hash IN ({$placeholders})";
+        $found        = $wpdb->get_col( $wpdb->prepare( $sql, ...$hashes ) );
         if ( is_array( $found ) ) {
             foreach ( $found as $f ) {
                 $existing[ $f ] = true;
@@ -560,7 +648,9 @@ function gim_add_urls( array $urls ): int {
 
     $added = 0;
     foreach ( $urls as $url ) {
-        if ( isset( $existing[ $url ] ) ) {
+        $hash = gim_url_hash( $url );
+
+        if ( isset( $existing[ $hash ] ) ) {
             continue;
         }
 
@@ -568,17 +658,24 @@ function gim_add_urls( array $urls ): int {
             $table,
             [
                 'url'        => $url,
+                'url_hash'   => $hash,
                 'indexed'    => null,
                 'coverage'   => null,
                 'checked_at' => null,
                 'sent_at'    => null,
                 'excluded'   => 0,
             ],
-            [ '%s', '%d', '%s', '%s', '%s', '%d' ]
+            [ '%s', '%s', '%d', '%s', '%s', '%s', '%d' ]
         );
 
         if ( $inserted ) {
             $added++;
+            $existing[ $hash ] = true;
+        } else {
+            // One row per hash: a failure here is either a race with another
+            // request or a real database problem. Logged without the URL body
+            // being turned into an error stream.
+            gim_log_debug( 'URL не добавлен в очередь: запись не прошла', [ 'url' => $url ] );
         }
     }
 
@@ -691,7 +788,7 @@ function gim_save_inspection( string $url, bool $indexed, string $coverage ): vo
             'coverage'   => $coverage,
             'checked_at' => current_time( 'mysql' ),
         ],
-        [ 'url' => $url ],
+        [ 'url_hash' => gim_url_hash( $url ) ],
         [ '%d', '%s', '%s' ],
         [ '%s' ]
     );
@@ -706,7 +803,7 @@ function gim_mark_sent( string $url ): void {
     $wpdb->update(
         $table,
         [ 'sent_at' => current_time( 'mysql' ) ],
-        [ 'url' => $url ],
+        [ 'url_hash' => gim_url_hash( $url ) ],
         [ '%s' ],
         [ '%s' ]
     );

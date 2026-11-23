@@ -41,10 +41,12 @@ function gim_ajax_init(): void {
 
 function gim_ajax_guard(): void {
     if ( ! check_ajax_referer( 'gim_ajax', 'nonce', false ) ) {
-        wp_send_json_error( [ 'message' => 'Недействительный nonce. Обновите страницу.' ], 403 );
+        gim_security_log( 'nonce_failed', 'ajax' );
+        wp_send_json_error( [ 'code' => 'gim_bad_nonce', 'message' => 'Недействительный nonce. Обновите страницу.' ], 403 );
     }
     if ( ! gim_current_user_is_admin() ) {
-        wp_send_json_error( [ 'message' => 'Доступ запрещён.' ], 403 );
+        gim_security_log( 'cap_denied', 'ajax' );
+        wp_send_json_error( [ 'code' => 'gim_cap_denied', 'message' => 'Доступ запрещён.' ], 403 );
     }
     if ( function_exists( 'set_time_limit' ) ) {
         @set_time_limit( 0 );
@@ -119,7 +121,7 @@ function gim_url_is_excluded( string $url ): bool {
     global $wpdb;
     $table = $wpdb->prefix . 'gim_unindexed';
     $val   = $wpdb->get_var(
-        $wpdb->prepare( "SELECT excluded FROM {$table} WHERE url = %s LIMIT 1", $url )
+        $wpdb->prepare( "SELECT excluded FROM {$table} WHERE url_hash = %s LIMIT 1", gim_url_hash( $url ) )
     );
     return (int) $val === 1;
 }
@@ -230,8 +232,9 @@ function gim_ajax_sync(): void {
             )
         );
     } catch ( Throwable $e ) {
-        gim_log_error( 'Ошибка синхронизации вручную: ' . $e->getMessage() );
-        gim_ajax_error( 'Ошибка синхронизации: ' . $e->getMessage(), 500 );
+        gim_log_error( 'Ошибка синхронизации вручную' );
+        gim_log_exception( $e );
+        gim_ajax_error( 'Не удалось выполнить синхронизацию. Подробности — в логе.', 500 );
     }
 }
 
@@ -251,8 +254,9 @@ function gim_ajax_recompute_exclusions(): void {
 
         gim_ajax_success( sprintf( 'Пересчёт выполнен. Помечено исключёнными: %d URL.', $excluded ) );
     } catch ( Throwable $e ) {
-        gim_log_error( 'Ошибка пересчёта исключений: ' . $e->getMessage() );
-        gim_ajax_error( 'Ошибка пересчёта: ' . $e->getMessage(), 500 );
+        gim_log_error( 'Ошибка пересчёта исключений' );
+        gim_log_exception( $e );
+        gim_ajax_error( 'Не удалось выполнить пересчёт. Подробности — в логе.', 500 );
     }
 }
 
@@ -265,26 +269,54 @@ function gim_ajax_purge_logs(): void {
 
     $days = gim_get_log_lifetime_days();
 
-    if ( $days <= 0 ) {
-        gim_ajax_error(
-            'Срок хранения логов не задан (0). Укажите количество дней в настройках и сохраните, затем повторите.',
-            422
-        );
-    }
-
     try {
-        $deleted = gim_purge_old_logs();
+        $deleted = 0;
 
-        gim_log_debug(
-            sprintf( 'Очистка логов вручную: удалено %d записей старше %d дней', $deleted, $days )
-        );
+        if ( $days > 0 ) {
+            $deleted = gim_purge_old_logs();
+
+            gim_log_debug(
+                sprintf( 'Очистка логов вручную: удалено %d записей старше %d дней', $deleted, $days )
+            );
+        }
+
+        // The row ceiling is independent of the retention period, so it runs
+        // even when the site keeps logs "forever".
+        $trimmed = gim_trim_log_rows();
+
+        if ( $trimmed > 0 ) {
+            gim_log_debug(
+                sprintf(
+                    'Очистка логов вручную: удалено %d записей сверх потолка %d',
+                    $trimmed,
+                    gim_get_log_max_rows()
+                )
+            );
+        }
+
+        if ( $days > 0 ) {
+            gim_ajax_success(
+                sprintf(
+                    'Удалено %d записей старше %d дней; сверх потолка — %d.',
+                    $deleted,
+                    $days,
+                    $trimmed
+                )
+            );
+            return;
+        }
 
         gim_ajax_success(
-            sprintf( 'Удалено %d записей старше %d дней.', $deleted, $days )
+            sprintf(
+                'Срок хранения 0 (бессрочно): по возрасту ничего не удалено. Удалено %d записей сверх потолка %d.',
+                $trimmed,
+                gim_get_log_max_rows()
+            )
         );
     } catch ( Throwable $e ) {
-        gim_log_error( 'Ошибка очистки логов: ' . $e->getMessage() );
-        gim_ajax_error( 'Ошибка очистки: ' . $e->getMessage(), 500 );
+        gim_log_error( 'Ошибка очистки логов' );
+        gim_log_exception( $e );
+        gim_ajax_error( 'Не удалось очистить лог. Подробности — в логе.', 500 );
     }
 }
 
@@ -589,16 +621,10 @@ function gim_ajax_diagnostic(): void {
         );
     }
 
-    // 7. Indexing API.
-    $publish = gim_publish_single( $test_url );
-    if ( $publish['ok'] ) {
-        $results['indexing_api'] = gim_diagnostic_result( 'ok', 'Пробная отправка прошла успешно.' );
-    } else {
-        $results['indexing_api'] = gim_diagnostic_result(
-            'fail',
-            sprintf( 'HTTP %d: %s', (int) $publish['code'], esc_html( $publish['message'] ) )
-        );
-    }
+    // 7. Indexing API — only sends anything when the administrator asked for it.
+    $probe = isset( $_POST['probe'] ) && '1' === sanitize_key( wp_unslash( $_POST['probe'] ) );
+
+    $results['indexing_api'] = gim_diagnostic_indexing_probe( (bool) $probe );
 
     // 8. Схема БД.
     global $wpdb;
@@ -709,6 +735,61 @@ function gim_ajax_diagnostic(): void {
     }
 
     gim_diagnostic_finish( $results );
+}
+
+/**
+ * Indexing API step of the diagnostics.
+ *
+ * By default it proves as much as possible without writing: the token, the
+ * property list, the permissions and the URL Inspection call already show that
+ * the service account works. A real URL notification is sent only when the
+ * administrator explicitly asks for it, because it spends one of the 200 daily
+ * notifications; such a probe is counted in the local daily counter, so it
+ * cannot silently bypass the cap.
+ *
+ * @param bool $probe Whether to send a real URL notification.
+ * @return array{status:string,status_label:string,status_class:string,message:string}
+ */
+function gim_diagnostic_indexing_probe( bool $probe ): array {
+    $test_url = home_url( '/' );
+
+    if ( ! $probe ) {
+        return gim_diagnostic_result(
+            'warning',
+            sprintf(
+                'Пробная отправка не выполнялась, чтобы не расходовать суточную квоту. Для реальной проверки включите «Выполнить пробную отправку URL» и запустите диагностику снова. URL для проверки: <code>%s</code>.',
+                esc_html( $test_url )
+            )
+        );
+    }
+
+    if ( gim_is_quota_exhausted( 'indexing' ) ) {
+        return gim_diagnostic_result(
+            'fail',
+            'Пробная отправка не выполнялась: суточная квота Indexing API уже исчерпана.'
+        );
+    }
+
+    $publish = gim_publish_single( $test_url );
+
+    if ( ! $publish['ok'] ) {
+        return gim_diagnostic_result(
+            'fail',
+            sprintf( 'HTTP %d: %s', (int) $publish['code'], esc_html( $publish['message'] ) )
+        );
+    }
+
+    // One real notification was consumed: count it against the daily cap.
+    gim_increment_count( 1 );
+
+    return gim_diagnostic_result(
+        'ok',
+        sprintf(
+            'Пробная отправка прошла успешно; израсходовано 1 уведомление (сегодня %d из %d).',
+            gim_get_sent_today(),
+            gim_get_daily_send_cap()
+        )
+    );
 }
 
 function gim_diagnostic_result( string $status, string $message ): array {

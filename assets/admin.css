@@ -5,6 +5,18 @@
     margin-right: 20px;
 }
 
+/* WCAG 2.4.11: the fixed bulk bar (and the admin bar) must not cover the
+   focused control. 120px is the bar height plus the 30px bottom offset. */
+html {
+    scroll-padding-top: 46px;
+    scroll-padding-bottom: 120px;
+}
+
+.wrap.gim-wrap :is(a, button, input, select, textarea, summary):focus {
+    scroll-margin-top: 46px;
+    scroll-margin-bottom: 120px;
+}
+
 .gim-tabs.nav-tab-wrapper {
     border-bottom: 1px solid #e0e0e0;
     padding-left: 0;
@@ -359,6 +371,9 @@
 }
 
 .gim-filter-title a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
     text-decoration: none;
     padding: 4px 10px;
     border-radius: 100px;
@@ -366,7 +381,6 @@
     font-weight: 500;
     transition: background .15s ease, color .15s ease;
     margin-right: 4px;
-    display: inline-block;
     margin-bottom: 4px;
 }
 
@@ -426,8 +440,12 @@
 }
 
 .gim-urls-search .button-link {
-    color: #b32d2e;
-    text-decoration: none;
+	display: inline-flex;
+	align-items: center;
+	min-height: 24px;
+	padding: 2px 4px;
+	color: #b32d2e;
+	text-decoration: none;
 }
 
 /* -------------------------------------------------------------------------
@@ -885,19 +903,19 @@
 }
 
 .gim-tag-chip__remove {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 18px;
-    height: 18px;
-    padding: 0;
-    margin: 0;
-    border: 0;
-    background: transparent;
-    color: #2271b1;
-    border-radius: 50%;
-    cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	padding: 0;
+	margin: 0;
+	border: 0;
+	background: transparent;
+	color: #2271b1;
+	border-radius: 50%;
+	cursor: pointer;
+	transition: background 0.15s ease, color 0.15s ease;
 }
 
 .gim-tag-chip__remove:hover {
@@ -1168,3 +1186,26 @@
     color: inherit;
     padding: 0;
 }
+
+/* -------------------------------------------------------------------------
+ * Diagnostics: the Indexing API probe spends real quota, so it is an explicit
+ * opt-in checkbox with a readable target.
+ * ---------------------------------------------------------------------- */
+
+.gim-diagnostic-probe {
+    display: inline-flex;
+    align-items: flex-start;
+    gap: 8px;
+    min-height: 24px;
+    padding: 2px 0;
+    font-size: 13px;
+    line-height: 1.6;
+    color: #50575e;
+    cursor: pointer;
+}
+
+.gim-diagnostic-probe input {
+    margin-top: 3px;
+    flex: 0 0 auto;
+}
+

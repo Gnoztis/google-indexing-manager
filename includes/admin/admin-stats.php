@@ -344,7 +344,7 @@ function gim_render_stats(): void {
         <p class="gim-actions-hint">
             <?php esc_html_e( 'Ручной запуск одного тика воркеров — выполняется в ближайший WP-Cron, игнорирует ночное окно.', 'google-indexing-manager' ); ?>
         </p>
-        <p class="gim-progress" id="gim-progress" style="display:none;"></p>
+        <p class="gim-progress" id="gim-progress" role="status" aria-live="polite" aria-atomic="true" style="display:none;"></p>
     </div>
     <?php
 }
